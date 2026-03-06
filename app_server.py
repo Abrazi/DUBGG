@@ -41,6 +41,11 @@ from api_server import app  # noqa: E402
 
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi import Request
+import mimetypes
+
+# Fix for Windows registry sometimes missing the JS content type
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
 
 logging.basicConfig(
     level=logging.INFO,
