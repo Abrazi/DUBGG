@@ -184,6 +184,10 @@ class CommandRequest(BaseModel):
     command: str  # 'start','stop','reset_fault','open_breaker','close_breaker','inject_fault','deexcite_on','deexcite_off'
 
 
+class ModbusDeviceRequest(BaseModel):
+    enabled: bool  # True = device online, False = device failure (offline)
+
+
 class ConfigRequest(BaseModel):
     simulate_fail_to_start: Optional[bool] = None
     fail_ramp_up: Optional[bool] = None
@@ -215,6 +219,10 @@ def get_generators():
         else:
             svc_mode = 'auto'
         
+        # find corresponding Modbus server to get disabled state
+        server = next((s for s in sim_instance.servers if s.name == gen.id), None)
+        modbus_disabled = server.modbus_disabled if server else False
+
         gen_list.append({
             "id": gen.id,
             "state": state_str,
@@ -235,6 +243,10 @@ def get_generators():
             "stopDelay": gen.StopDelay,
             "deexcited": gen.SSL['SSL547_GenDeexcited'],
             "serviceMode": svc_mode,
+            "modbusDisabled": modbus_disabled,
+            # heartbeat supervision (R192 Bit 7)
+            "heartbeatFailed": gen.heartbeat_failed,
+            "secondsSinceHeartbeat": round(time.time() - gen.last_heartbeat_time, 1),
         })
     return gen_list
 
@@ -252,6 +264,9 @@ def get_generator(gen_id: str):
                 svc_mode = 'manual'
             else:
                 svc_mode = 'auto'
+
+            server = next((s for s in sim_instance.servers if s.name == gen.id), None)
+            modbus_disabled = server.modbus_disabled if server else False
 
             return {
                 "id": gen.id,
@@ -272,6 +287,10 @@ def get_generator(gen_id: str):
                 "stopDelay": gen.StopDelay,
                 "deexcited": gen.SSL['SSL547_GenDeexcited'],
                 "serviceMode": svc_mode,
+                "modbusDisabled": modbus_disabled,
+                # heartbeat supervision (R192 Bit 7)
+                "heartbeatFailed": gen.heartbeat_failed,
+                "secondsSinceHeartbeat": round(time.time() - gen.last_heartbeat_time, 1),
             }
     return None
 
@@ -476,6 +495,24 @@ def update_config(gen_id: str, cfg: ConfigRequest):
                 pass
 
     return {"status": "success", "message": f"Config updated for {gen_id}"}
+
+
+@router.post("/generators/{gen_id}/modbus")
+def set_modbus_state(gen_id: str, req: ModbusDeviceRequest):
+    """Enable or disable the Modbus TCP server for a generator to simulate device failure."""
+    if not sim_instance:
+        return {"status": "error", "message": "Simulation not running"}
+    server = next((s for s in sim_instance.servers if s.name == gen_id), None)
+    if not server:
+        return {"status": "error", "message": f"Server not found for {gen_id}"}
+    if req.enabled:
+        server.enable_modbus()
+        logger.info(f"[{gen_id}] Modbus device ENABLED via API")
+        return {"status": "success", "message": f"{gen_id} Modbus server re-enabled"}
+    else:
+        server.disable_modbus()
+        logger.info(f"[{gen_id}] Modbus device DISABLED (failure simulation) via API")
+        return {"status": "success", "message": f"{gen_id} Modbus server disabled (device failure)"}
 
 
 @router.get("/admin/status")

@@ -111,3 +111,17 @@ export const fetchGeneratorLogs = async (
     return [];
   }
 };
+
+export const setModbusEnabled = async (id: string, enabled: boolean): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/generators/${id}/modbus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.error('Modbus Enable/Disable Error:', error);
+    return false;
+  }
+};

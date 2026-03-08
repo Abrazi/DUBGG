@@ -145,7 +145,7 @@ class GeneratorController:
         self.previousR192 = 0  # Track R192 to detect actual changes
         self.last_heartbeat_time = time.time()
         self.heartbeat_failed = False
-        self.HEARTBEAT_TIMEOUT = 10.0 #10 seconds FOR 12/2=6 SEC 
+        self.HEARTBEAT_TIMEOUT = 60.0  # 60 seconds — auto-shutdown if no heartbeat
 
         self.SSL = {
             'SSL425_ServiceSWOff': False,
@@ -572,11 +572,17 @@ class GeneratorController:
                     self.parse_R192(current_R192)
                     self.previousR192 = current_R192
             
-            # Supervision check
+            # Heartbeat supervision: if R192 Bit 7 (SSL708_ClockPulse_CMD) stops toggling
+            # for longer than HEARTBEAT_TIMEOUT seconds, trigger automatic shutdown.
             if not self.heartbeat_failed:
                 if (time.time() - self.last_heartbeat_time) > self.HEARTBEAT_TIMEOUT:
-                    self.log(f"Heartbeat failure: R192 Bit 7 stopped for > {self.HEARTBEAT_TIMEOUT}s")
+                    self.log(f"HEARTBEAT TIMEOUT: R192 Bit 7 has not toggled for > {self.HEARTBEAT_TIMEOUT}s — initiating automatic shutdown")
                     self.heartbeat_failed = True
+                    # Clear the demand command so update_state() will trigger the shutdown path
+                    self.SSL['SSL701_DemandModule_CMD'] = False
+                    # Directly fire shutdown for states that won't check SSL701 on their own
+                    if self.sm.state in ("starting", "running", "fastTransfer"):
+                        self.sm.fire("shutdown")
 
             # Update state machine and flags first
             self.validate_ssl_flags()
@@ -746,6 +752,10 @@ class IndividualModbusServer:
         self.running = False
         # Fix: Add lock for thread-safe datastore access
         self.datastore_lock = threading.Lock()
+        # Device failure simulation: when True the TCP listener is offline
+        self.modbus_disabled = False
+        self._server_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._server_task: Optional[asyncio.Task] = None
         
     def _initialize_registers(self) -> ModbusDeviceContext:
         num_registers = 1000
@@ -766,15 +776,26 @@ class IndividualModbusServer:
             raise RuntimeError("Server context not initialized")
         logger.info(f"Starting Modbus server for {self.name} on {self.ip_address}:{self.port}")
         await StartAsyncTcpServer(context=self.context, address=(self.ip_address, self.port))
-    
+
     def _run_server_thread(self):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self._server_loop = loop
         try:
-            loop.run_until_complete(self._run_server_async())
+            self._server_task = loop.create_task(self._run_server_async())
+            loop.run_until_complete(self._server_task)
+        except asyncio.CancelledError:
+            logger.info(f"[{self.name}] Modbus TCP server stopped (device disabled)")
         except Exception as e:
-            logger.error(f"Server error for {self.name}: {e}")
-    
+            if not self.modbus_disabled:
+                logger.error(f"Server error for {self.name}: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+            self._server_loop = None
+
     def _simulation_loop(self):
         while self.running:
             if self.datastore is None:
@@ -792,7 +813,35 @@ class IndividualModbusServer:
             except Exception as e:
                 logger.error(f"Simulation error for {self.name}: {e}")
             time.sleep(0.1)
-    
+
+    def disable_modbus(self):
+        """Stop the TCP listener to simulate device failure. Simulation keeps running."""
+        if self.modbus_disabled:
+            logger.info(f"[{self.name}] Modbus already disabled")
+            return
+        self.modbus_disabled = True
+        logger.info(f"[{self.name}] Simulating device failure: stopping Modbus TCP server")
+        loop = self._server_loop
+        task = self._server_task
+        if loop and task and not task.done():
+            loop.call_soon_threadsafe(task.cancel)
+
+    def enable_modbus(self):
+        """Restart the TCP listener after a simulated device failure."""
+        if not self.modbus_disabled:
+            logger.info(f"[{self.name}] Modbus already enabled")
+            return
+        self.modbus_disabled = False
+        logger.info(f"[{self.name}] Enabling device: restarting Modbus TCP server")
+        # Re-create context from existing datastore
+        if self.datastore is not None:
+            self.context = ModbusServerContext(devices={1: self.datastore}, single=False)
+        threading.Thread(
+            target=self._run_server_thread,
+            daemon=True,
+            name=f"Server-{self.name}"
+        ).start()
+
     def start(self):
         self.datastore = self._initialize_registers()
         self.context = ModbusServerContext(devices={1: self.datastore}, single=False)
@@ -800,9 +849,13 @@ class IndividualModbusServer:
         threading.Thread(target=self._run_server_thread, daemon=True, name=f"Server-{self.name}").start()
         threading.Thread(target=self._simulation_loop, daemon=True, name=f"Sim-{self.name}").start()
         logger.info(f"✓ {self.name} started on {self.ip_address}:{self.port}")
-    
+
     def stop(self):
         self.running = False
+        loop = self._server_loop
+        task = self._server_task
+        if loop and task and not task.done():
+            loop.call_soon_threadsafe(task.cancel)
 
 
 class ModbusTCPSlaveGenRun:

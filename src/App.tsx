@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { MonitoringDashboard } from './components/MonitoringDashboard';
 import { ControlPanel } from './components/ControlPanel';
@@ -73,19 +73,56 @@ function App() {
     });
   };
 
+  const prevFaultStates = useRef<Record<string, Record<string, boolean>>>({});
+
   const checkForAlarms = (data: GeneratorStatus) => {
-    if (data.isFaulted) {
-      const existingAlarm = alarms.find(a => a.generatorId === data.id && a.type === 'critical');
-      if (!existingAlarm) {
-        setAlarms(prev => [...prev, {
-          id: `${data.id}-${Date.now()}`,
-          type: 'critical',
-          message: `Generator ${data.id} entered FAULT state`,
+    const faultFlags = [
+      { key: 'simulateFailToStart' as const, name: 'Fail to Start' },
+      { key: 'failRampUp' as const, name: 'Fail Ramp Up' },
+      { key: 'failRampDown' as const, name: 'Fail Ramp Down' },
+      { key: 'failStartTime' as const, name: 'Fail Start Time' },
+      { key: 'isFaulted' as const, name: 'Generator Fault' },
+    ];
+
+    if (!prevFaultStates.current[data.id]) {
+      prevFaultStates.current[data.id] = {};
+      faultFlags.forEach(f => {
+        prevFaultStates.current[data.id][f.key] = !!data[f.key];
+      });
+      return;
+    }
+
+    const prev = prevFaultStates.current[data.id];
+    const newAlarms: Alarm[] = [];
+
+    faultFlags.forEach(f => {
+      const currentVal = !!data[f.key];
+      const prevVal = prev[f.key];
+
+      if (currentVal && !prevVal) {
+        newAlarms.push({
+          id: `${data.id}-${f.key}-on-${Date.now()}`,
+          type: 'warning',
+          message: `Fault Injected: ${f.name}`,
           timestamp: new Date(),
           acknowledged: false,
           generatorId: data.id
-        }]);
+        });
+      } else if (!currentVal && prevVal) {
+        newAlarms.push({
+          id: `${data.id}-${f.key}-off-${Date.now()}`,
+          type: 'info',
+          message: `Fault Removed: ${f.name}`,
+          timestamp: new Date(),
+          acknowledged: false,
+          generatorId: data.id
+        });
       }
+      prevFaultStates.current[data.id][f.key] = currentVal;
+    });
+
+    if (newAlarms.length > 0) {
+      setAlarms(prevAlarms => [...prevAlarms, ...newAlarms]);
     }
   };
 

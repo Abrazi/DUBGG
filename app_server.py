@@ -39,7 +39,7 @@ if _BASE_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 from api_server import app  # noqa: E402
 
-from fastapi.responses import FileResponse, HTMLResponse
+c
 from fastapi import Request, APIRouter
 import mimetypes
 
@@ -109,7 +109,11 @@ def setup_spa(app_instance):
         # SPA fallback
         index_html = os.path.join(STATIC_DIR, "index.html")
         if os.path.isfile(index_html):
-            return FileResponse(index_html)
+            response = FileResponse(index_html)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
 
         return HTMLResponse("Frontend not found", status_code=404)
     

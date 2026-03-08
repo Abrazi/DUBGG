@@ -32,12 +32,17 @@ export function GeneratorsOverview({ generators }: GeneratorsOverviewProps) {
             <CardContent className="p-3">
               <div className="flex items-center justify-between">
                 <span className="text-white font-medium">{gen.id}</span>
-                <span className={`px-2 py-1 text-xs rounded ${getStateBadgeColor(gen.state)}`}>{gen.state}</span>
+                <div className="flex gap-2">
+                  <span className={`px-2 py-1 text-xs rounded font-bold ${gen.heartbeatFailed ? 'bg-red-500/20 text-red-500 border border-red-500/50 animate-pulse' : 'bg-green-500/20 text-green-400 border border-green-500/50'}`}>
+                    {gen.heartbeatFailed ? 'HB LOST' : `HB OK (${gen.secondsSinceHeartbeat ?? 0}s)`}
+                  </span>
+                  <span className={`px-2 py-1 text-xs rounded ${getStateBadgeColor(gen.state)}`}>{gen.state}</span>
+                </div>
               </div>
               <div className="mt-2 flex items-center justify-between gap-4">
                 <div>
                   <div className="text-sm text-slate-300">Breaker</div>
-                  <div className={`text-xs font-semibold ${gen.breakerClosed ? 'text-emerald-400' : 'text-red-400'}`}> 
+                  <div className={`text-xs font-semibold ${gen.breakerClosed ? 'text-emerald-400' : 'text-red-400'}`}>
                     {gen.breakerClosed ? 'CLOSED' : 'OPEN'}
                   </div>
                 </div>

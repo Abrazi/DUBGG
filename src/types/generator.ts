@@ -20,6 +20,11 @@ export interface GeneratorStatus {
   deexcited?: boolean;
   // service switch mode: off/manual/auto (SSL425/426/427)
   serviceMode?: 'off' | 'manual' | 'auto';
+  // modbus device failure simulation flag
+  modbusDisabled?: boolean;
+  // heartbeat supervision (R192 Bit 7)
+  heartbeatFailed?: boolean;
+  secondsSinceHeartbeat?: number;
 }
 
 export interface Alarm {

@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { GeneratorStatus } from '../types/generator';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Play, Square, RotateCcw, ShieldAlert, Zap } from 'lucide-react';
-import { sendCommand, updateGeneratorConfig } from '../utils/api';
+import { Play, Square, RotateCcw, ShieldAlert, Zap, WifiOff, Wifi } from 'lucide-react';
+import { sendCommand, updateGeneratorConfig, setModbusEnabled } from '../utils/api';
 
 interface ControlPanelProps {
   generator: GeneratorStatus;
@@ -84,6 +84,13 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
     }
     applyConfig();
   }, [config]);
+
+  const handleModbusToggle = async (enable: boolean) => {
+    const success = await setModbusEnabled(generator.id, enable);
+    if (success) {
+      setTimeout(onUpdate, 600);
+    }
+  };
 
   return (
     <Card className="bg-slate-800 border-slate-700">
@@ -221,7 +228,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
                 <option value="off">Off</option>
               </select>
             </div>
-              {/* button removed - config updates are applied automatically */}
+            {/* button removed - config updates are applied automatically */}
           </div>
         </div>
 
@@ -232,6 +239,50 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
             <div className={`px-3 py-1 rounded-full text-sm font-medium ${generator.breakerClosed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
               {generator.breakerClosed ? 'CLOSED' : 'OPEN'}
             </div>
+          </div>
+        </div>
+
+        {/* Modbus Device Failure Simulation */}
+        <div className={`p-4 rounded-lg border-2 ${generator.modbusDisabled
+            ? 'bg-red-950/40 border-red-600/60'
+            : 'bg-slate-900 border-slate-700'
+          }`}>
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-slate-300 text-sm font-semibold flex items-center gap-2">
+              {generator.modbusDisabled
+                ? <WifiOff className="w-4 h-4 text-red-400" />
+                : <Wifi className="w-4 h-4 text-emerald-400" />}
+              Modbus Device Status
+            </h4>
+            <span className={`px-3 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide ${generator.modbusDisabled
+                ? 'bg-red-600/30 text-red-300 border border-red-500/50'
+                : 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
+              }`}>
+              {generator.modbusDisabled ? '⬛ OFFLINE — Device Failure' : '🟢 ONLINE'}
+            </span>
+          </div>
+          <p className="text-slate-500 text-xs mb-3">
+            {generator.modbusDisabled
+              ? 'The Modbus TCP server is offline. External Modbus masters cannot reach this device. Internal simulation continues.'
+              : 'The Modbus TCP server is reachable on the network. External Modbus masters can connect normally.'}
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              onClick={() => handleModbusToggle(false)}
+              disabled={generator.modbusDisabled === true}
+              className="bg-orange-700 hover:bg-orange-800 disabled:opacity-40 text-white h-12 flex items-center justify-center gap-2 text-sm"
+            >
+              <WifiOff className="w-4 h-4" />
+              Simulate Device Failure
+            </Button>
+            <Button
+              onClick={() => handleModbusToggle(true)}
+              disabled={!generator.modbusDisabled}
+              className="bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white h-12 flex items-center justify-center gap-2 text-sm"
+            >
+              <Wifi className="w-4 h-4" />
+              Enable Device
+            </Button>
           </div>
         </div>
       </CardContent>
