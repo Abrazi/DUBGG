@@ -1,14 +1,16 @@
 import { SystemStatus } from '../types/hmi';
-import { Power, Activity, Clock, Cpu } from 'lucide-react';
+import { Power, Activity, Clock, Cpu, Settings, LayoutDashboard } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import logo from '../assets/enersol.png';
+import logo from '../assets/Enersol.png';
 
 interface HeaderProps {
   status: SystemStatus;
   onToggleSystem: () => void;
+  activeView: 'dashboard' | 'admin';
+  onViewChange: (view: 'dashboard' | 'admin') => void;
 }
 
-export function Header({ status, onToggleSystem }: HeaderProps) {
+export function Header({ status, onToggleSystem, activeView, onViewChange }: HeaderProps) {
   const formatUptime = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -27,6 +29,29 @@ export function Header({ status, onToggleSystem }: HeaderProps) {
             <h1 className="text-2xl font-bold text-white tracking-tight">Enersol Generator Controller</h1>
             <p className="text-slate-400 text-sm">Industrial Process Control System</p>
           </div>
+        </div>
+
+        <div className="flex items-center gap-4 bg-slate-800/50 p-1 rounded-lg border border-slate-700">
+          <button
+            onClick={() => onViewChange('dashboard')}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-md transition-all ${activeView === 'dashboard'
+                ? 'bg-slate-700 text-white shadow-lg'
+                : 'text-slate-400 hover:text-slate-200'
+              }`}
+          >
+            <LayoutDashboard className="w-4 h-4" />
+            <span className="text-sm font-medium">Dashboard</span>
+          </button>
+          <button
+            onClick={() => onViewChange('admin')}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-md transition-all ${activeView === 'admin'
+                ? 'bg-slate-700 text-white shadow-lg'
+                : 'text-slate-400 hover:text-slate-200'
+              }`}
+          >
+            <Settings className="w-4 h-4" />
+            <span className="text-sm font-medium">Administration</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-6">

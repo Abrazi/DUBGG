@@ -65,6 +65,19 @@ class NetworkUtils:
 
 class NetworkScriptGenerator:
     @staticmethod
+    def generate_linux_script(ips: List[str], adapter_name: str) -> str:
+        """Generate a Linux bash script that adds the given IPs to the adapter.
+
+        Uses the `ip addr add` command. Requires sudo privileges.
+        """
+        lines = ["#!/bin/bash", "echo 'Adding IP addresses...'"]
+        for ip in ips:
+            # ip addr add <ip>/24 dev <device>
+            lines.append(f'sudo ip addr add {ip}/24 dev "{adapter_name}"')
+        lines.append("echo 'Done.'")
+        return "\n".join(lines)
+
+    @staticmethod
     def generate_windows_batch(ips: List[str], adapter_name: str) -> str:
         """Generate a Windows batch script that adds the given IPs to the adapter.
 

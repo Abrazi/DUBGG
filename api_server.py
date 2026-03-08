@@ -4,15 +4,26 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import List, Optional
-from fastapi import FastAPI
+from typing import List, Optional, Dict, Tuple, Any
+from fastapi import FastAPI, APIRouter, Request
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import psutil
+import platform
+import socket
+import os
+from contextlib import asynccontextmanager
 
 # Import the simulation logic from the file containing your provided code
 # Ensure your provided code is saved as 'generator_sim.py'
 try:
-    from generator_sim import ModbusTCPSlaveGenRun, GeneratorState
+    from generator_sim import (
+        ModbusTCPSlaveGenRun,
+        GeneratorState,
+        GeneratorController,
+        SwitchgearController
+    )
 except ImportError:
     print("Error: Could not import 'generator_sim'. Please save the provided code as 'generator_sim.py'")
     exit(1)
@@ -24,7 +35,93 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Generator HMI API")
+# Modbus port - Set to 502 for external access (Requires sudo/root on Linux)
+MODBUS_PORT = int(os.environ.get("MODBUS_PORT", 502))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global sim_instance
+    logger.info("Initializing Generator Simulation...")
+    
+    # Port fallback logic: try 502 (privileged), fall back to 5020 if permission denied
+    actual_port = MODBUS_PORT
+    try:
+        # Check if we can bind to the port (basic check)
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('0.0.0.0', actual_port))
+    except (PermissionError, OSError) as e:
+        if actual_port == 502:
+            logger.warning(f"Could not bind to port 502 ({e}). Falling back to port 5020.")
+            actual_port = 5020
+        else:
+            logger.error(f"Could not bind to port {actual_port}: {e}")
+
+    # Initialize simulation
+    sim_instance = ModbusTCPSlaveGenRun(port=actual_port, num_generators=22)
+    
+    # Start simulation in a separate thread
+    def run_sim():
+        sim_instance.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            sim_instance.stop()
+            
+    sim_thread = threading.Thread(target=run_sim, daemon=True)
+    sim_thread.start()
+
+    # Background Status Monitor for Events
+    def status_monitor():
+        last_states = {}  # pyre-ignore
+        while True:
+            try:
+                if sim_instance:
+                    for server in sim_instance.servers:
+                        is_running = server.running
+                        is_port_open = False
+                        try:
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                s.settimeout(0.5)
+                                is_port_open = s.connect_ex((server.ip_address, server.port)) == 0
+                        except Exception:
+                            is_port_open = False
+                        
+                        current_state = (is_running, is_port_open)
+                        if server.name in last_states:
+                            old_running, old_port = last_states[server.name]  # pyre-ignore
+                            
+                            # Detect transitions
+                            if is_running != old_running:
+                                status_msg = "STARTED" if is_running else "STOPPED"
+                                logger.info(f"[{server.name}] [Backend] Server Process {status_msg}")
+                            
+                            if is_port_open != old_port:
+                                status_msg = "CONNECTED" if is_port_open else "DISCONNECTED"
+                                logger.info(f"[{server.name}] [Backend] Port {server.port} {status_msg}")
+                        else:
+                            # Initial state logging
+                            run_msg = "STARTED" if is_running else "STOPPED"
+                            port_msg = "CONNECTED" if is_port_open else "DISCONNECTED"
+                            logger.info(f"[{server.name}] [Backend] Initial Status: Server {run_msg}, Port {server.port} {port_msg}")
+                        
+                        last_states[server.name] = current_state
+            except Exception as e:
+                logger.error(f"Status monitor error: {e}")
+            
+            time.sleep(10) # 10s wait for next check
+
+    monitor_thread = threading.Thread(target=status_monitor, daemon=True)
+    monitor_thread.start()
+
+    logger.info(f"Simulation started on port {actual_port}, background monitor active, and API server ready.")
+    yield
+    logger.info("Shutting down simulation...")
+    if sim_instance:
+        sim_instance.stop()
+
+app = FastAPI(title="Generator HMI API", lifespan=lifespan)
 
 # Enable CORS for React frontend
 app.add_middleware(
@@ -51,7 +148,7 @@ from typing import Any
 sim_instance: Any = None
 
 # Per-generator circular log buffers  {gen_id: deque of log dicts}
-GEN_LOG_BUFFERS: dict = {}
+GEN_LOG_BUFFERS: Dict[str, collections.deque] = {}
 GEN_LOG_LOCK = threading.Lock()
 MAX_LOG_ENTRIES = 200
 
@@ -66,9 +163,9 @@ class GenLogHandler(logging.Handler):
         if msg.startswith('['):
             end = msg.find(']')
             if end > 0:
-                gen_id = msg[1:end]
+                gen_id = msg[1:end]  # pyre-ignore
                 entry = {
-                    "timestamp": datetime.utcfromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                    "timestamp": datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],  # pyre-ignore
                     "level": record.levelname,
                     "message": msg,
                 }
@@ -97,27 +194,10 @@ class ConfigRequest(BaseModel):
     # allow service mode change: 'off','manual','auto'
     service_mode: Optional[str] = None
 
-@app.on_event("startup")
-async def startup_event():
-    global sim_instance
-    logger.info("Initializing Generator Simulation...")
-    # Initialize simulation (disable network check for local dev if needed)
-    sim_instance = ModbusTCPSlaveGenRun(port=502, num_generators=22)
-    
-    # Start simulation in a separate thread so it doesn't block FastAPI
-    def run_sim():
-        sim_instance.start()
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            sim_instance.stop()
-            
-    sim_thread = threading.Thread(target=run_sim, daemon=True)
-    sim_thread.start()
-    logger.info("Simulation started and API server ready.")
+# Create the router
+router = APIRouter()
 
-@app.get("/generators")
+@router.get("/generators")
 def get_generators():
     """Get status of all generators"""
     if not sim_instance:
@@ -158,7 +238,7 @@ def get_generators():
         })
     return gen_list
 
-@app.get("/generators/{gen_id}")
+@router.get("/generators/{gen_id}")
 def get_generator(gen_id: str):
     """Get status of a specific generator"""
     if not sim_instance:
@@ -195,7 +275,7 @@ def get_generator(gen_id: str):
             }
     return None
 
-@app.post("/generators/{gen_id}/command")
+@router.post("/generators/{gen_id}/command")
 def send_command(gen_id: str, req: CommandRequest):
     """Send control command to a specific generator"""
     if not sim_instance:
@@ -289,7 +369,7 @@ def send_command(gen_id: str, req: CommandRequest):
             
     return {"status": "success", "message": f"Command '{req.command}' sent to {gen_id}"}
 
-@app.post("/generators/{gen_id}/config")
+@router.post("/generators/{gen_id}/config")
 def update_config(gen_id: str, cfg: ConfigRequest):
     """Update simulation options for a specific generator"""
     if not sim_instance:
@@ -398,7 +478,50 @@ def update_config(gen_id: str, cfg: ConfigRequest):
     return {"status": "success", "message": f"Config updated for {gen_id}"}
 
 
-@app.get("/generators/{gen_id}/logs")
+@router.get("/admin/status")
+def get_admin_status():
+    """Get the status of all Modbus servers and system health"""
+    if not sim_instance:
+        return {"status": "error", "message": "Simulation not running"}
+
+    server_statuses = []
+    for server in sim_instance.servers:
+        # Check if port is actually listening (basic check)
+        is_port_open = False
+        try:
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.01)
+                # We check the specific IP and port
+                is_port_open = s.connect_ex((server.ip_address, server.port)) == 0
+        except Exception:
+            is_port_open = False
+
+        server_statuses.append({
+            "name": server.name,
+            "ip": server.ip_address,
+            "port": server.port,
+            "is_running": server.running,
+            "is_port_open": is_port_open,
+            "type": "generator" if server.name.startswith('G') and not server.name.startswith('GPS') else "switchgear"
+        })
+
+    # System metrics
+    system_info = {
+        "cpu_percent": psutil.cpu_percent(),
+        "memory_percent": psutil.virtual_memory().percent,
+        "platform": platform.system(),
+        "uptime": int(time.time() - psutil.boot_time()) if hasattr(psutil, "boot_time") else 0,
+        "process_uptime": int(time.time() - psutil.Process().create_time())
+    }
+
+    return {
+        "servers": server_statuses,
+        "system": system_info
+    }
+
+
+@router.get("/generators/{gen_id}/logs")
 def get_generator_logs(gen_id: str, limit: int = 100):
     """Return recent log entries for a specific generator."""
     with GEN_LOG_LOCK:
@@ -407,8 +530,10 @@ def get_generator_logs(gen_id: str, limit: int = 100):
             return []
         entries = list(buf)
     # Return newest-first, up to `limit`
-    return list(reversed(entries[-limit:]))
+    return list(reversed(entries[-limit:]))  # pyre-ignore
 
+
+app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn

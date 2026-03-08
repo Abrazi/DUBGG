@@ -10,6 +10,7 @@ import asyncio
 import os
 import subprocess
 import tempfile
+import platform
 from utils.network_utils import NetworkUtils, NetworkScriptGenerator
 
 logger = logging.getLogger(__name__)
@@ -98,8 +99,8 @@ class GeneratorController:
         self.rVoltage = 0.0
 
         self.NominalFrequency = 50.0
-        self.NominalPower = 3500.0
-        # Fix: Add separate reactive power rating (typically ~0.4-0.6 of active power rating)
+        self.NominalPower = 3350.0
+        # Reactive power rating (typically ~0.4-0.6 of active power rating)
         self.NominalReactivePower = 2100.0  # Typical for 0.8-0.85 power factor
 
         self.RampRateVoltage = 10000.0
@@ -144,7 +145,7 @@ class GeneratorController:
         self.previousR192 = 0  # Track R192 to detect actual changes
         self.last_heartbeat_time = time.time()
         self.heartbeat_failed = False
-        self.HEARTBEAT_TIMEOUT = 10.0 #10 seconds
+        self.HEARTBEAT_TIMEOUT = 10.0 #10 seconds FOR 12/2=6 SEC 
 
         self.SSL = {
             'SSL425_ServiceSWOff': False,
@@ -925,24 +926,41 @@ class ModbusTCPSlaveGenRun:
         return True
 
     def add_ips_to_adapter(self, ips: List[str], adapter_name: str) -> bool:
-        """Generates and runs a batch script as admin to add IPs to the selected adapter."""
+        """Generates and runs a script to add IPs to the selected adapter."""
         logger.info(f"Adding {len(ips)} IP addresses to adapter '{adapter_name}'...")
-        script_content = NetworkScriptGenerator.generate_windows_batch(ips, adapter_name)
+        system = platform.system().lower()
         
+        if system == "windows":
+            script_content = NetworkScriptGenerator.generate_windows_batch(ips, adapter_name)
+            ext = ".bat"
+        else:
+            script_content = NetworkScriptGenerator.generate_linux_script(ips, adapter_name)
+            ext = ".sh"
+            
         # Write script to temporary file
         temp_dir = tempfile.gettempdir()
-        temp_path = os.path.join(temp_dir, "scada_scout_network_config.bat")
+        temp_path = os.path.join(temp_dir, f"scada_scout_network_config{ext}")
         
         try:
             with open(temp_path, "w") as f:
                 f.write(script_content)
             
-            # Execute as administrator using PowerShell Start-Process
-            # -Wait ensures we wait for completion
-            # -Verb RunAs triggers elevation prompt
-            ps_cmd = f"Start-Process cmd -ArgumentList '/c', '{temp_path}' -Verb RunAs -Wait"
-            logger.info("Triggering Windows UAC elevation prompt for network configuration...")
-            result = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
+            if system == "windows":
+                # Execute as administrator using PowerShell Start-Process
+                ps_cmd = f"Start-Process cmd -ArgumentList '/c', '{temp_path}' -Verb RunAs -Wait"
+                logger.info("Triggering Windows UAC elevation prompt for network configuration...")
+                result = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
+            else:
+                # On Linux, make it executable and run with pkexec or sudo (script already has sudo internal)
+                os.chmod(temp_path, 0o755)
+                # Try pkexec for GUI prompt if available, otherwise just run it (it will prompt for sudo in terminal)
+                if os.path.exists("/usr/bin/pkexec"):
+                    cmd = ["pkexec", temp_path]
+                else:
+                    cmd = [temp_path]
+                
+                logger.info("Running network configuration script...")
+                result = subprocess.run(cmd, capture_output=True)
             
             if result.returncode == 0:
                 logger.info("IP addition script completed successfully.")
@@ -950,7 +968,11 @@ class ModbusTCPSlaveGenRun:
                 time.sleep(1)
                 return True
             else:
-                logger.error(f"Failed to run elevation command: {result.stderr.decode(errors='ignore')}")
+                stderr = result.stderr.decode(errors='ignore')
+                stdout = result.stdout.decode(errors='ignore')
+                logger.error(f"Failed to run configuration command. RC: {result.returncode}")
+                if stderr: logger.error(f"Stderr: {stderr}")
+                if stdout: logger.debug(f"Stdout: {stdout}")
                 return False
         except Exception as e:
             logger.error(f"Error while adding IP addresses: {e}")

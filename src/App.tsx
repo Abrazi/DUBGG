@@ -5,12 +5,14 @@ import { ControlPanel } from './components/ControlPanel';
 import { AlarmPanel } from './components/AlarmPanel';
 import { GeneratorsOverview } from './components/GeneratorsOverview';
 import { GeneratorLogWindow } from './components/GeneratorLogWindow';
+import { AdministrationPage } from './components/AdministrationPage';
 import { GeneratorStatus, Alarm } from './types/generator';
 import { fetchAllGenerators, fetchGenerator } from './utils/api';
 // using native select instead of custom UI component
 
 
 function App() {
+  const [activeView, setActiveView] = useState<'dashboard' | 'admin'>('dashboard');
   const [allGenerators, setAllGenerators] = useState<GeneratorStatus[]>([]);
   const [selectedGenId, setSelectedGenId] = useState<string>("");
   const [currentGenerator, setCurrentGenerator] = useState<GeneratorStatus | null>(null);
@@ -112,6 +114,8 @@ function App() {
           flowRate: 0
         }}
         onToggleSystem={() => { }}
+        activeView={activeView}
+        onViewChange={setActiveView}
       />
 
       <div className="flex">
@@ -123,49 +127,55 @@ function App() {
         </aside>
 
         <main className="flex-1 p-6">
-          {/* Generator Selector */}
-          <div className="mb-6">
-            <label className="text-slate-400 text-sm font-medium mb-2 block">Select Generator</label>
-            <select
-              value={selectedGenId}
-              onChange={e => setSelectedGenId(e.target.value)}
-              className="w-full md:w-64 bg-slate-800 border-slate-700 text-white p-2 rounded"
-            >
-              {allGenerators.map(gen => (
-                <option
-                  key={gen.id}
-                  value={gen.id}
-                  className="bg-slate-800 text-white"
-                >
-                  {gen.id} - {gen.state.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {currentGenerator && (
+          {activeView === 'admin' ? (
+            <AdministrationPage />
+          ) : (
             <>
-              <MonitoringDashboard generator={currentGenerator} historicalData={historicalData} />
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2">
-                  <ControlPanel
-                    generator={currentGenerator}
-                    onUpdate={refreshCurrentGenerator}
-                  />
-                </div>
-                <div>
-                  <AlarmPanel
-                    alarms={alarms}
-                    onAcknowledge={handleAcknowledgeAlarm}
-                    onClear={handleClearAlarm}
-                    onClearAll={handleClearAllAlarms}
-                  />
-                </div>
+              {/* Generator Selector */}
+              <div className="mb-6">
+                <label className="text-slate-400 text-sm font-medium mb-2 block">Select Generator</label>
+                <select
+                  value={selectedGenId}
+                  onChange={e => setSelectedGenId(e.target.value)}
+                  className="w-full md:w-64 bg-slate-800 border-slate-700 text-white p-2 rounded"
+                >
+                  {allGenerators.map(gen => (
+                    <option
+                      key={gen.id}
+                      value={gen.id}
+                      className="bg-slate-800 text-white"
+                    >
+                      {gen.id} - {gen.state.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              {/* Per-generator live event log */}
-              <GeneratorLogWindow genId={currentGenerator.id} pollInterval={1500} maxEntries={100} />
+              {currentGenerator && (
+                <>
+                  <MonitoringDashboard generator={currentGenerator} historicalData={historicalData} />
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2">
+                      <ControlPanel
+                        generator={currentGenerator}
+                        onUpdate={refreshCurrentGenerator}
+                      />
+                    </div>
+                    <div>
+                      <AlarmPanel
+                        alarms={alarms}
+                        onAcknowledge={handleAcknowledgeAlarm}
+                        onClear={handleClearAlarm}
+                        onClearAll={handleClearAllAlarms}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Per-generator live event log */}
+                  <GeneratorLogWindow genId={currentGenerator.id} pollInterval={1500} maxEntries={100} />
+                </>
+              )}
             </>
           )}
         </main>

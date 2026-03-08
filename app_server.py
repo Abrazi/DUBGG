@@ -40,7 +40,7 @@ if _BASE_DIR not in sys.path:
 from api_server import app  # noqa: E402
 
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi import Request
+from fastapi import Request, APIRouter
 import mimetypes
 
 # Fix for Windows registry sometimes missing the JS content type
@@ -77,29 +77,9 @@ else:
     )
 
 
-@app.get("/{full_path:path}", include_in_schema=False)
-async def serve_spa(request: Request, full_path: str):
-    """
-    1. If the path resolves to a real file inside frontend_dist  -> serve it.
-    2. Otherwise return index.html so the React SPA can boot and handle routing.
-    """
-    # Guard against directory traversal
-    safe_path = os.path.normpath(full_path).lstrip(os.sep).lstrip("/")
-    candidate = os.path.join(STATIC_DIR, safe_path)
-
-    if os.path.isfile(candidate):
-        return FileResponse(candidate)
-
-    # SPA fallback
-    index_html = os.path.join(STATIC_DIR, "index.html")
-    if os.path.isfile(index_html):
-        return FileResponse(index_html)
-
-    return HTMLResponse(
-        "<h2>Frontend not found. Please rebuild the EXE after running "
-        "'npm run build'.</h2>",
-        status_code=404,
-    )
+# ---------------------------------------------------------------------------
+# SPA Catch-all (Logic moved to __main__ block for priority)
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -112,10 +92,38 @@ def _open_browser(host: str, port: int):
 
 
 # ---------------------------------------------------------------------------
+# SPA Catch-all
+# ---------------------------------------------------------------------------
+def setup_spa(app_instance):
+    spa_router = APIRouter()
+    
+    @spa_router.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(request: Request, full_path: str):
+        # Guard against directory traversal
+        safe_path = os.path.normpath(full_path).lstrip(os.sep).lstrip("/")
+        candidate = os.path.join(STATIC_DIR, safe_path)
+
+        if os.path.isfile(candidate) and not safe_path == "":
+            return FileResponse(candidate)
+
+        # SPA fallback
+        index_html = os.path.join(STATIC_DIR, "index.html")
+        if os.path.isfile(index_html):
+            return FileResponse(index_html)
+
+        return HTMLResponse("Frontend not found", status_code=404)
+    
+    # Mount SPA router AFTER all other routes are already in app_instance
+    app_instance.include_router(spa_router)
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
+
+    # Mount SPA routes explicitly AFTER API routes
+    setup_spa(app)
 
     parser = argparse.ArgumentParser(description="DUBGG Generator HMI Server")
     parser.add_argument(

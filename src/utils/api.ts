@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { GeneratorStatus } from '../types/generator';
+import { AdminStatus } from '../types/admin';
 
 export interface GeneratorLogEntry {
   timestamp: string;
@@ -22,6 +23,17 @@ export const fetchAllGenerators = async (): Promise<GeneratorStatus[]> => {
   } catch (error) {
     console.error('API Error:', error);
     return [];
+  }
+};
+
+export const fetchAdminStatus = async (): Promise<AdminStatus | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/status`);
+    if (!response.ok) throw new Error('Failed to fetch admin status');
+    return await response.json();
+  } catch (error) {
+    console.error('Admin Status Error:', error);
+    return null;
   }
 };
 

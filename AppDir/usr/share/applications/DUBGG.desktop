@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DUBGG Generator HMI
+Exec=DUBGG_HMI
+Icon=DUBGG
+Comment=Enersol Generator Control System
+Categories=Utility;
+Terminal=true
+X-AppImage-Version=1.0
