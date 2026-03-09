@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
     # Background Status Monitor for Events
     def status_monitor():
         last_states = {}  # pyre-ignore
+        previous_clients = {}  # Track connected clients per server
         first_run = True
         while True:
             try:
@@ -92,6 +93,16 @@ async def lifespan(app: FastAPI):
                                 is_port_open = s.connect_ex((server.ip_address, server.port)) == 0
                         except Exception:
                             is_port_open = False
+                        
+                        # Get current connected clients
+                        connected_clients = set()
+                        try:
+                            connections = psutil.net_connections(kind='inet')
+                            for c in connections:
+                                if (c.laddr and c.laddr.ip == server.ip_address and c.laddr.port == server.port and c.status == 'ESTABLISHED' and c.raddr):
+                                    connected_clients.add((c.raddr.ip, c.raddr.port))
+                        except Exception as e:
+                            logger.debug(f"Error getting connections for {server.name}: {e}")
                         
                         current_state = (is_running, is_port_open)
                         if server.name in last_states:
@@ -111,7 +122,27 @@ async def lifespan(app: FastAPI):
                             port_msg = "CONNECTED" if is_port_open else "DISCONNECTED"
                             logger.info(f"[{server.name}] [Backend] Initial Status: Server {run_msg}, Port {server.port} {port_msg}")
                         
+                        # Check for client connection changes
+                        previous = previous_clients.get(server.name, set())
+                        new_clients = connected_clients - previous
+                        disconnected_clients = previous - connected_clients
+                        
+                        for client_ip, client_port in new_clients:
+                            try:
+                                hostname = socket.gethostbyaddr(client_ip)[0]
+                            except:
+                                hostname = client_ip
+                            logger.info(f"[{server.name}] Client CONNECTED: {hostname} ({client_ip}:{client_port}) at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        
+                        for client_ip, client_port in disconnected_clients:
+                            try:
+                                hostname = socket.gethostbyaddr(client_ip)[0]
+                            except:
+                                hostname = client_ip
+                            logger.info(f"[{server.name}] Client DISCONNECTED: {hostname} ({client_ip}:{client_port}) at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        
                         last_states[server.name] = current_state
+                        previous_clients[server.name] = connected_clients
             except Exception as e:
                 logger.error(f"Status monitor error: {e}")
             
