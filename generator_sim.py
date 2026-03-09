@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 import math
+import socket
 from typing import Optional, List, Dict
 from enum import IntEnum
 from pymodbus.server import StartAsyncTcpServer
@@ -756,6 +757,10 @@ class IndividualModbusServer:
         self.modbus_disabled = False
         self._server_loop: Optional[asyncio.AbstractEventLoop] = None
         self._server_task: Optional[asyncio.Task] = None
+        self._server_thread: Optional[threading.Thread] = None
+        self._server_stop_event = threading.Event()
+        self._server_ready_event = threading.Event()  # Signals when server is actually listening
+        self._server_startup_error: Optional[str] = None  # Tracks startup errors
         
     def _initialize_registers(self) -> ModbusDeviceContext:
         num_registers = 1000
@@ -772,29 +777,101 @@ class IndividualModbusServer:
         return store
     
     async def _run_server_async(self):
+        # create the server ourselves so we can keep a handle for shutdown
         if self.context is None:
             raise RuntimeError("Server context not initialized")
         logger.info(f"Starting Modbus server for {self.name} on {self.ip_address}:{self.port}")
-        await StartAsyncTcpServer(context=self.context, address=(self.ip_address, self.port))
+        from pymodbus.server import ModbusTcpServer
+        server = ModbusTcpServer(self.context, address=(self.ip_address, self.port))
+        # store to instance so disable_modbus can close it
+        self._pymodbus_server = server
+        try:
+            await server.serve_forever()
+        except Exception as e:
+            # Clear ready flag if startup fails
+            self._server_ready_event.clear()
+            self._server_startup_error = str(e)
+            raise
+        finally:
+            self._pymodbus_server = None
+
+    def _check_port_ready(self):
+        """Check if the server port is actually open and listening. Returns True when ready."""
+        max_attempts = 30  # Maximum 3 seconds of checking (30 × 100ms)
+        for attempt in range(max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    result = s.connect_ex((self.ip_address, self.port))
+                    if result == 0:
+                        logger.info(f"[{self.name}] ✓ Port {self.port} confirmed OPEN on {self.ip_address} (attempt {attempt + 1})")
+                        return True
+                    else:
+                        logger.debug(f"[{self.name}] Port check {attempt + 1}/{max_attempts}: connection refused/not ready")
+            except Exception as e:
+                logger.debug(f"[{self.name}] Port check exception (attempt {attempt + 1}): {type(e).__name__}: {e}")
+            time.sleep(0.1)
+        logger.error(f"[{self.name}] ✗ Port {self.port} on {self.ip_address} failed to open after {max_attempts} attempts ({max_attempts * 0.1:.1f}s)")
+        return False
 
     def _run_server_thread(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        self._server_loop = loop
         try:
-            self._server_task = loop.create_task(self._run_server_async())
-            loop.run_until_complete(self._server_task)
-        except asyncio.CancelledError:
-            logger.info(f"[{self.name}] Modbus TCP server stopped (device disabled)")
-        except Exception as e:
-            if not self.modbus_disabled:
-                logger.error(f"Server error for {self.name}: {e}")
-        finally:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._server_loop = loop
             try:
-                loop.close()
-            except Exception:
-                pass
-            self._server_loop = None
+                self._server_task = loop.create_task(self._run_server_async())
+                
+                # Start a separate thread to monitor port readiness
+                def monitor_port():
+                    logger.debug(f"[{self.name}] Port monitor starting - checking for server on {self.ip_address}:{self.port}")
+                    try:
+                        if self._check_port_ready():
+                            self._server_ready_event.set()
+                            logger.info(f"[{self.name}] ✓ Port monitor: Server READY - port is open and accepting connections")
+                        else:
+                            logger.error(f"[{self.name}] ✗ Port monitor: Server FAILED - port never became open")
+                            self._server_startup_error = "Port binding failed - port never became accessible"
+                            # Cancel the task if port didn't open
+                            if self._server_task and not self._server_task.done():
+                                try:
+                                    loop.call_soon_threadsafe(self._server_task.cancel)
+                                    logger.debug(f"[{self.name}] Cancelled server task due to port check failure")
+                                except Exception as e:
+                                    logger.debug(f"[{self.name}] Error cancelling task: {e}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Port monitor exception: {e}")
+                        self._server_startup_error = f"Port monitor error: {str(e)}"
+                
+                port_monitor = threading.Thread(target=monitor_port, daemon=True, name=f"PortMonitor-{self.name}")
+                port_monitor.start()
+                logger.debug(f"[{self.name}] Port monitor thread started")
+                
+                loop.run_until_complete(self._server_task)
+            except asyncio.CancelledError:
+                logger.info(f"[{self.name}] Modbus TCP server stopped (device disabled)")
+                self._server_ready_event.clear()
+            except Exception as e:
+                self._server_ready_event.clear()
+                self._server_startup_error = str(e)
+                if not self.modbus_disabled:
+                    logger.error(f"[{self.name}] Server startup error: {e}")
+                else:
+                    logger.debug(f"[{self.name}] Server error during shutdown (expected): {e}")
+            finally:
+                # make sure any outstanding async generators finish
+                try:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                except Exception:
+                    pass
+                try:
+                    loop.close()
+                except Exception as e:
+                    logger.debug(f"[{self.name}] Error closing loop: {e}")
+                self._server_loop = None
+                self._server_task = None
+        finally:
+            self._server_stop_event.set()
 
     def _simulation_loop(self):
         while self.running:
@@ -821,32 +898,170 @@ class IndividualModbusServer:
             return
         self.modbus_disabled = True
         logger.info(f"[{self.name}] Simulating device failure: stopping Modbus TCP server")
+        
+        # Ask the async server to shut down cleanly via its own object reference.
         loop = self._server_loop
         task = self._server_task
+        if loop:
+            def _shutdown_server():
+                try:
+                    srv = self._pymodbus_server
+                    if srv:
+                        logger.debug(f"[{self.name}] Calling pymodbus server.shutdown()")
+                        loop.create_task(srv.shutdown())
+                except Exception as e:
+                    logger.debug(f"[{self.name}] Error scheduling server shutdown: {e}")
+            try:
+                loop.call_soon_threadsafe(_shutdown_server)
+            except Exception as e:
+                logger.debug(f"[{self.name}] Could not schedule server shutdown: {e}")
+
         if loop and task and not task.done():
-            loop.call_soon_threadsafe(task.cancel)
+            try:
+                logger.debug(f"[{self.name}] Cancelling server task as fallback...")
+                loop.call_soon_threadsafe(task.cancel)
+                # also stop the loop in case the task is stuck in accept
+                try:
+                    loop.call_soon_threadsafe(loop.stop)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.debug(f"[{self.name}] Error cancelling task: {e}")
+            # wait for the helper thread to signal it has cleaned up
+            if not self._server_stop_event.wait(timeout=5.0):
+                logger.warning(f"[{self.name}] Server thread did not exit within 5 seconds after cancel/shutdown")
+            # also join the thread to be absolutely sure
+            if self._server_thread and self._server_thread.is_alive():
+                try:
+                    self._server_thread.join(timeout=1.0)
+                except Exception:
+                    pass
+        else:
+            logger.debug(f"[{self.name}] No active task to cancel (loop={loop is not None}, task={task is not None}, done={task.done() if task else 'N/A'})")
+        
+        # Clear the ready event to indicate server is now offline
+        self._server_ready_event.clear()
+        logger.debug(f"[{self.name}] Cleared ready event")
 
     def enable_modbus(self):
         """Restart the TCP listener after a simulated device failure."""
         if not self.modbus_disabled:
             logger.info(f"[{self.name}] Modbus already enabled")
             return
-        self.modbus_disabled = False
-        logger.info(f"[{self.name}] Enabling device: restarting Modbus TCP server")
+        
+        logger.info(f"[{self.name}] Enabling device: restarting Modbus TCP server on {self.ip_address}:{self.port}")
+        
+        # Force kill old thread if it exists (stronger cleanup)
+        old_thread = self._server_thread
+        if old_thread and old_thread.is_alive():
+            logger.debug(f"[{self.name}] Stopping old server thread...")
+            # Cancel the running task to force thread exit
+            old_loop = self._server_loop
+            old_task = self._server_task
+            if old_loop and old_task and not old_task.done():
+                try:
+                    old_loop.call_soon_threadsafe(old_task.cancel)
+                except Exception as e:
+                    logger.debug(f"[{self.name}] Could not cancel old task: {e}")
+            
+            # Wait for thread with longer timeout
+            if not self._server_stop_event.wait(timeout=5.0):
+                logger.warning(f"[{self.name}] Old thread still alive after 5s - forcing ahead")
+        
+        # Before attempting to bind again, wait until the old socket isn't stuck in CLOSE_WAIT.
+        logger.debug(f"[{self.name}] Waiting for OS to release port {self.port} (no CLOSE_WAIT or TIME_WAIT)...")
+        start = time.time()
+        while True:
+            try:
+                import psutil
+                conns = [c for c in psutil.net_connections(kind='inet')
+                         if c.laddr and c.laddr.ip == self.ip_address and c.laddr.port == self.port
+                         and c.status in ('CLOSE_WAIT', 'TIME_WAIT')]
+                if not conns:
+                    break
+            except Exception:
+                # if psutil fails just fall back to a simple sleep
+                pass
+            if time.time() - start > 5.0:
+                logger.debug(f"[{self.name}] timed out waiting for CLOSE_WAIT/TIME_WAIT to clear")
+                break
+            time.sleep(0.1)
+        # additional fixed delay as a safety
+        time.sleep(0.2)
+        
         # Re-create context from existing datastore
         if self.datastore is not None:
             self.context = ModbusServerContext(devices={1: self.datastore}, single=False)
-        threading.Thread(
+        
+        # Reset the stop event and ready event for the new thread
+        self._server_stop_event.clear()
+        self._server_ready_event.clear()
+        self._server_startup_error = None
+        
+        # Start new server thread
+        new_thread = threading.Thread(
             target=self._run_server_thread,
             daemon=True,
             name=f"Server-{self.name}"
-        ).start()
+        )
+        self._server_thread = new_thread
+        new_thread.start()
+        logger.debug(f"[{self.name}] New server thread started, waiting for server to bind (up to 10 seconds)...")
+        
+        # Wait for server to be ready (with 10-second timeout to account for port checking + startup)
+        if self._server_ready_event.wait(timeout=10.0):
+            # initial success; verify thread is still alive and port remains open briefly
+            time.sleep(0.5)  # Longer wait to ensure server is stable
+            still_running = self._server_thread and self._server_thread.is_alive()
+            port_ok = False
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    port_ok = s.connect_ex((self.ip_address, self.port)) == 0
+            except Exception:
+                port_ok = False
+
+            if still_running and port_ok and not self._server_startup_error:
+                self.modbus_disabled = False
+                logger.info(f"[{self.name}] ✓ Modbus device ENABLED - server is listening on {self.ip_address}:{self.port}")
+                # Verify loop is still running
+                try:
+                    loop_ok = self._server_loop is not None and self._server_loop.is_running()
+                    logger.info(f"[{self.name}] Server loop running: {loop_ok}")
+                except Exception as e:
+                    logger.debug(f"[{self.name}] Could not check loop status: {e}")
+                # Diagnostic: log all listeners on this port
+                try:
+                    import psutil
+                    conns = psutil.net_connections(kind='inet')
+                    for c in conns:
+                        if c.laddr and c.laddr.port == self.port:
+                            logger.info(f"[{self.name}] LISTENER: {c.laddr} status={c.status}")
+                except Exception as e:
+                    logger.debug(f"[{self.name}] net_connections failed: {e}")
+            else:
+                # Something went wrong after initial ready event
+                reason = self._server_startup_error or "server thread exited or port closed immediately"
+                logger.error(f"[{self.name}] ✗ Server appeared to start but then failed: {reason}")
+                logger.error(f"[{self.name}]   Thread alive: {still_running}, Port open: {port_ok}, Error: {self._server_startup_error}")
+                self.modbus_disabled = True
+                logger.error(f"[{self.name}] Device REMAINS OFFLINE after failed startup check")
+        else:
+            # Server failed to start within timeout
+            error_msg = self._server_startup_error or "Server binding timeout - port check exceeded 10 seconds"
+            logger.error(f"[{self.name}] ✗ FAILED to enable Modbus server: {error_msg}")
+            self.modbus_disabled = True  # Keep disabled if startup failed
+            logger.error(f"[{self.name}] Device REMAINS OFFLINE due to startup failure. Check if IP {self.ip_address} is available on network.")
 
     def start(self):
         self.datastore = self._initialize_registers()
         self.context = ModbusServerContext(devices={1: self.datastore}, single=False)
         self.running = True
-        threading.Thread(target=self._run_server_thread, daemon=True, name=f"Server-{self.name}").start()
+        self._server_stop_event.clear()
+        self._server_ready_event.clear()
+        self._server_startup_error = None
+        self._server_thread = threading.Thread(target=self._run_server_thread, daemon=True, name=f"Server-{self.name}")
+        self._server_thread.start()
         threading.Thread(target=self._simulation_loop, daemon=True, name=f"Sim-{self.name}").start()
         logger.info(f"✓ {self.name} started on {self.ip_address}:{self.port}")
 
@@ -855,7 +1070,10 @@ class IndividualModbusServer:
         loop = self._server_loop
         task = self._server_task
         if loop and task and not task.done():
-            loop.call_soon_threadsafe(task.cancel)
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except Exception as e:
+                logger.debug(f"[{self.name}] Error cancelling task during stop: {e}")
 
 
 class ModbusTCPSlaveGenRun:

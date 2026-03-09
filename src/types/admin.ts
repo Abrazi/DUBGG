@@ -4,6 +4,7 @@ export interface ServerStatus {
     port: number;
     is_running: boolean;
     is_port_open: boolean;
+    modbusDisabled: boolean;
     type: 'generator' | 'switchgear';
 }
 

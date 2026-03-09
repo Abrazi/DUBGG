@@ -97,11 +97,12 @@ export function AdministrationPage() {
                                 <th className="px-6 py-3 font-medium">Port</th>
                                 <th className="px-6 py-3 font-medium text-center">Server Process</th>
                                 <th className="px-6 py-3 font-medium text-center">Port Accessible</th>
+                                <th className="px-6 py-3 font-medium text-center">Modbus Status</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800">
                             {status?.servers.map((server) => (
-                                <tr key={server.name} className="hover:bg-slate-800/50 transition-colors">
+                                <tr key={server.name} className={`hover:bg-slate-800/50 transition-colors ${server.modbusDisabled ? 'bg-red-950/20' : ''}`}>
                                     <td className="px-6 py-4 text-white font-semibold">{server.name}</td>
                                     <td className="px-6 py-4">
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${server.type === 'generator' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
@@ -122,12 +123,22 @@ export function AdministrationPage() {
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex justify-center">
-                                            {server.is_port_open ? (
+                                            {!server.modbusDisabled && server.is_port_open ? (
                                                 <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                                            ) : server.modbusDisabled ? (
+                                                <XCircle className="w-5 h-5 text-orange-500" title="Device failure simulation active" />
                                             ) : (
                                                 <XCircle className="w-5 h-5 text-red-500" />
                                             )}
                                         </div>
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${server.modbusDisabled
+                                            ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                                            : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                            }`}>
+                                            {server.modbusDisabled ? '⬛ OFFLINE' : '🟢 ONLINE'}
+                                        </span>
                                     </td>
                                 </tr>
                             ))}
@@ -137,7 +148,10 @@ export function AdministrationPage() {
             </div>
 
             <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-slate-400 text-sm">
-                <p><strong>Note:</strong> Port Accessible check (502) verifies if the Modbus server is truly listening on the specified IP address. If "Server Process" is green but "Port Accessible" is red, there might be an IP binding issue or a firewall blocking the connection.</p>
+                <p><strong>Note:</strong> <br/>
+                • <strong>Port Accessible</strong> shows if the Modbus server is reachable. Orange icon (⊘) indicates device failure simulation is active.<br/>
+                • <strong>Modbus Status</strong> shows whether the device is ONLINE (accepting connections) or OFFLINE (failure simulation active).<br/>
+                • If "Server Process" is green but "Port Accessible" is red (and not from failure simulation), there might be an IP binding issue or a firewall blocking the connection.</p>
             </div>
         </div>
     );

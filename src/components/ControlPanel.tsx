@@ -86,9 +86,12 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
   }, [config]);
 
   const handleModbusToggle = async (enable: boolean) => {
-    const success = await setModbusEnabled(generator.id, enable);
-    if (success) {
+    const result = await setModbusEnabled(generator.id, enable);
+    if (result.success) {
       setTimeout(onUpdate, 600);
+    } else {
+      // show error to user (simple alert for now)
+      alert(`Failed to ${enable ? 'enable' : 'disable'} device: ${result.message}`);
     }
   };
 

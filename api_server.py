@@ -75,9 +75,14 @@ async def lifespan(app: FastAPI):
     # Background Status Monitor for Events
     def status_monitor():
         last_states = {}  # pyre-ignore
+        first_run = True
         while True:
             try:
                 if sim_instance:
+                    if first_run:
+                        logger.info(f"[Monitor] Starting - found {len(sim_instance.servers)} total servers")
+                        first_run = False
+                    
                     for server in sim_instance.servers:
                         is_running = server.running
                         is_port_open = False
@@ -101,7 +106,7 @@ async def lifespan(app: FastAPI):
                                 status_msg = "CONNECTED" if is_port_open else "DISCONNECTED"
                                 logger.info(f"[{server.name}] [Backend] Port {server.port} {status_msg}")
                         else:
-                            # Initial state logging
+                            # Initial state logging (only on first monitor check for this server)
                             run_msg = "STARTED" if is_running else "STOPPED"
                             port_msg = "CONNECTED" if is_port_open else "DISCONNECTED"
                             logger.info(f"[{server.name}] [Backend] Initial Status: Server {run_msg}, Port {server.port} {port_msg}")
@@ -505,10 +510,18 @@ def set_modbus_state(gen_id: str, req: ModbusDeviceRequest):
     server = next((s for s in sim_instance.servers if s.name == gen_id), None)
     if not server:
         return {"status": "error", "message": f"Server not found for {gen_id}"}
+    
     if req.enabled:
         server.enable_modbus()
-        logger.info(f"[{gen_id}] Modbus device ENABLED via API")
-        return {"status": "success", "message": f"{gen_id} Modbus server re-enabled"}
+        # Check if the server actually got enabled after the call
+        time.sleep(0.5)  # Brief delay to allow status to stabilize
+        if not server.modbus_disabled:
+            logger.info(f"[{gen_id}] Modbus device ENABLED via API - confirmed online")
+            return {"status": "success", "message": f"{gen_id} Modbus server re-enabled and confirmed online"}
+        else:
+            logger.error(f"[{gen_id}] Modbus device ENABLE FAILED via API - device remains offline")
+            error_reason = server._server_startup_error or "Server failed to start (check logs for details)"
+            return {"status": "error", "message": f"{gen_id} Modbus server failed to start: {error_reason}"}
     else:
         server.disable_modbus()
         logger.info(f"[{gen_id}] Modbus device DISABLED (failure simulation) via API")
@@ -540,6 +553,7 @@ def get_admin_status():
             "port": server.port,
             "is_running": server.running,
             "is_port_open": is_port_open,
+            "modbusDisabled": server.modbus_disabled,
             "type": "generator" if server.name.startswith('G') and not server.name.startswith('GPS') else "switchgear"
         })
 
