@@ -175,7 +175,7 @@ class GeneratorController:
             'SSL548_PowerReductionActivated': False,
             'SSL549_LoadRejectedGCBOpen': False,
             'SSL550_GenSyncLoadReleas': False,
-            'SSL563_ReadyforFastStart': False,
+            'SSL563_ReadyforFastStart': True,
             'SSL564_ModuleLockedOut': False,
             'SSL592_EngineAtStandStill': True,
             'SSL593_ScaveningInOper': False,
@@ -285,6 +285,7 @@ class GeneratorController:
         self.SSL['SSL547_GenDeexcited'] = False
         self.SSL['SSL592_EngineAtStandStill'] = True
         self.SSL['SSL550_GenSyncLoadReleas'] = False
+        self.SSL['SSL563_ReadyforFastStart'] = True
 
     def on_enter_standstill(self):
         self.log("ENTERING STATE: Standstill")
@@ -298,6 +299,7 @@ class GeneratorController:
         self.SSL['SSL448_ModuleisDemanded'] = True
         self.SSL['SSL592_EngineAtStandStill'] = False
         self.SSL['SSL443_EngineInStartingPhase'] = True
+        self.SSL['SSL563_ReadyforFastStart'] = False
 
     def on_enter_running(self):
         self.log("ENTERING STATE: Running")
