@@ -39,7 +39,6 @@ if _BASE_DIR not in sys.path:
 # ---------------------------------------------------------------------------
 from api_server import app  # noqa: E402
 
-c
 from fastapi import Request, APIRouter
 import mimetypes
 
