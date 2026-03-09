@@ -40,6 +40,7 @@ if _BASE_DIR not in sys.path:
 from api_server import app  # noqa: E402
 
 from fastapi import Request, APIRouter
+from fastapi.responses import FileResponse, HTMLResponse
 import mimetypes
 
 # Fix for Windows registry sometimes missing the JS content type
