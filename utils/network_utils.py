@@ -85,13 +85,13 @@ class NetworkScriptGenerator:
         """Generate a Windows batch script that adds the given IPs to the adapter.
 
         This is a simple, idempotent generator which issues `netsh interface ip add address`
-        commands for each provided IP. The mask is left as a common /24 (255.255.255.0);
+        commands for each provided IP. The mask is left as a common /16 (255.255.0.0);
         callers may edit if a different netmask is required.
         """
         lines = ["@echo off", "echo Adding IP addresses...", "setlocal enabledelayedexpansion"]
         for ip in ips:
             # netsh syntax: name="Adapter Name" addr=<ip> mask=<netmask>
-            lines.append(f'netsh interface ip add address name="{adapter_name}" addr={ip} mask=255.255.255.0')
+            lines.append(f'netsh interface ip add address name="{adapter_name}" addr={ip} mask=255.255.0.0')
         lines.append("echo Done.")
         return "\r\n".join(lines)
 
