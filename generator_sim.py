@@ -1038,7 +1038,7 @@ class IndividualModbusServer:
                     conns = psutil.net_connections(kind='inet')
                     for c in conns:
                         if c.laddr and c.laddr.port == self.port:
-                            logger.info(f"[{self.name}] LISTENER: {c.laddr} status={c.status}")
+                            logger.debug(f"[{self.name}] LISTENER: {c.laddr} status={c.status}")
                 except Exception as e:
                     logger.debug(f"[{self.name}] net_connections failed: {e}")
             else:
@@ -1139,7 +1139,12 @@ class ModbusTCPSlaveGenRun:
             logger.error(f"Failed to get network interfaces: {e}")
             return True # Proceed anyway, maybe it works
             
-        local_ips = [iface.ip_address for iface in local_interfaces]
+        local_ips = []
+        for iface in local_interfaces:
+            if hasattr(iface, 'all_ips'):
+                local_ips.extend(iface.all_ips)
+            else:
+                local_ips.append(iface.ip_address)
         
         ips_to_add = []
         occupied_on_network = []

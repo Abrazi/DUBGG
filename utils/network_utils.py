@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 import socket
 import subprocess
@@ -10,6 +10,7 @@ class NetworkInterface:
     name: str
     ip_address: str
     is_up: bool
+    all_ips: List[str] = field(default_factory=list)
 
 
 class NetworkUtils:
@@ -28,12 +29,14 @@ class NetworkUtils:
             interfaces: List[NetworkInterface] = []
             for name, addr_list in addrs.items():
                 ip = "127.0.0.1"
+                all_ips = []
                 for a in addr_list:
                     if getattr(a, "family", None) == socket.AF_INET:
-                        ip = a.address
-                        break
+                        if ip == "127.0.0.1":
+                            ip = a.address
+                        all_ips.append(a.address)
                 is_up = bool(stats.get(name).isup) if stats.get(name) else False
-                interfaces.append(NetworkInterface(name=name, ip_address=ip, is_up=is_up))
+                interfaces.append(NetworkInterface(name=name, ip_address=ip, is_up=is_up, all_ips=all_ips))
             return interfaces
         except Exception:
             try:
@@ -41,7 +44,7 @@ class NetworkUtils:
                 ip = socket.gethostbyname(hostname)
             except Exception:
                 ip = "127.0.0.1"
-            return [NetworkInterface(name="primary", ip_address=ip, is_up=True)]
+            return [NetworkInterface(name="primary", ip_address=ip, is_up=True, all_ips=[ip])]
 
     @staticmethod
     def check_host_reachable(ip: str, timeout: float = 1.0) -> bool:

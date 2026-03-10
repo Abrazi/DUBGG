@@ -84,6 +84,12 @@ async def lifespan(app: FastAPI):
                         logger.info(f"[Monitor] Starting - found {len(sim_instance.servers)} total servers")
                         first_run = False
                     
+                    try:
+                        system_connections = psutil.net_connections(kind='inet')
+                    except Exception as e:
+                        logger.debug(f"Error getting system network connections: {e}")
+                        system_connections = []
+
                     for server in sim_instance.servers:
                         is_running = server.running
                         is_port_open = False
@@ -97,12 +103,11 @@ async def lifespan(app: FastAPI):
                         # Get current connected clients
                         connected_clients = set()
                         try:
-                            connections = psutil.net_connections(kind='inet')
-                            for c in connections:
+                            for c in system_connections:
                                 if (c.laddr and c.laddr.ip == server.ip_address and c.laddr.port == server.port and c.status == 'ESTABLISHED' and c.raddr):
                                     connected_clients.add((c.raddr.ip, c.raddr.port))
                         except Exception as e:
-                            logger.debug(f"Error getting connections for {server.name}: {e}")
+                            logger.debug(f"Error parsing connections for {server.name}: {e}")
                         
                         current_state = (is_running, is_port_open)
                         if server.name in last_states:
