@@ -51,7 +51,7 @@ def build_appimage():
     print_step("Packaging as AppImage (Linux)...")
     
     dist_dir = os.path.join(os.getcwd(), "dist")
-    linux_exe = os.path.join(dist_dir, "DUBGG_HMI")
+    linux_exe = os.path.join(dist_dir, "DUBGG_HMI_Final")
     
     if not os.path.isfile(linux_exe):
         print_err(f"Expected PyInstaller output not found at: {linux_exe}")
@@ -63,14 +63,14 @@ def build_appimage():
     os.makedirs(os.path.join(appdir, "usr", "bin"))
     
     # Copy the PyInstaller executable into the AppDir
-    shutil.copy2(linux_exe, os.path.join(appdir, "usr", "bin", "DUBGG_HMI"))
+    shutil.copy2(linux_exe, os.path.join(appdir, "usr", "bin", "DUBGG_HMI_Final"))
     
     # Create AppRun script
     apprun_path = os.path.join(appdir, "AppRun")
     with open(apprun_path, "w") as f:
         f.write("#!/bin/sh\n")
         f.write('HERE="$(dirname "$(readlink -f "${0}")")"\n')
-        f.write('exec "${HERE}/usr/bin/DUBGG_HMI" "$@"\n')
+        f.write('exec "${HERE}/usr/bin/DUBGG_HMI_Final" "$@"\n')
     os.chmod(apprun_path, 0o755)
 
     # Create .desktop file
@@ -78,17 +78,22 @@ def build_appimage():
     with open(desktop_path, "w") as f:
         f.write("[Desktop Entry]\n")
         f.write("Type=Application\n")
-        f.write("Name=DUBGG HMI\n")
-        f.write("Exec=DUBGG_HMI\n")
+        f.write("Name=DUBGG HMI Final\n")
+        f.write("Exec=DUBGG_HMI_Final\n")
         f.write("Icon=DUBGG_HMI\n")
         f.write("Categories=Utility;\n")
         f.write("Terminal=true\n") # Set to true so logs are visible
         
-    # Create a dummy icon if one doesn't exist (AppImageKit requires an icon)
-    icon_path = os.path.join(appdir, "DUBGG_HMI.png")
-    with open(icon_path, "wb") as f:
-        # A tiny valid 1x1 transparent PNG file
-        f.write(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
+    # Set up the icon for the AppImage
+    src_icon = os.path.join(os.getcwd(), "DUBGG.png")
+    dst_icon = os.path.join(appdir, "DUBGG_HMI.png")
+    if os.path.isfile(src_icon):
+        shutil.copy2(src_icon, dst_icon)
+    else:
+        # Create a dummy icon if one doesn't exist (AppImageKit requires an icon)
+        with open(dst_icon, "wb") as f:
+            # A tiny valid 1x1 transparent PNG file
+            f.write(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
 
     # Download appimagetool if not exists
     appimagetool_path = os.path.join(os.getcwd(), "appimagetool-x86_64.AppImage")
@@ -108,8 +113,8 @@ def build_appimage():
         # Some linux systems require APPIMAGE_EXTRACT_AND_RUN=1 for appimagetool inside docker/CI
         env = os.environ.copy()
         env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
-        subprocess.check_call([appimagetool_path, appdir, os.path.join(dist_dir, "DUBGG_HMI-x86_64.AppImage")], env=env)
-        print_ok(f"AppImage created at: {os.path.join(dist_dir, 'DUBGG_HMI-x86_64.AppImage')}")
+        subprocess.check_call([appimagetool_path, appdir, os.path.join(dist_dir, "DUBGG_HMI_Final-x86_64.AppImage")], env=env)
+        print_ok(f"AppImage created at: {os.path.join(dist_dir, 'DUBGG_HMI_Final-x86_64.AppImage')}")
     except subprocess.CalledProcessError as e:
         print_err("appimagetool failed. See output above.")
 
@@ -183,7 +188,7 @@ def main():
     run_cmd([py_exe, "-m", "PyInstaller", "DUBGG.spec", "--noconfirm"])
     
     if is_windows:
-        exe_path = os.path.join("dist", "DUBGG_HMI.exe")
+        exe_path = os.path.join("dist", "DUBGG_HMI_Final.exe")
         if not os.path.exists(exe_path):
             print_err(f"Expected PyInstaller output not found at: {exe_path}")
         size_mb = os.path.getsize(exe_path) / (1024 * 1024)
@@ -195,7 +200,7 @@ def main():
         
     else:
         # Linux / MacOS
-        elf_path = os.path.join("dist", "DUBGG_HMI")
+        elf_path = os.path.join("dist", "DUBGG_HMI_Final")
         if not os.path.exists(elf_path):
             print_err(f"Expected PyInstaller output not found at: {elf_path}")
         size_mb = os.path.getsize(elf_path) / (1024 * 1024)
