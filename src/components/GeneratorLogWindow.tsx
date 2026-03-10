@@ -7,7 +7,7 @@ interface GeneratorLogWindowProps {
     genId: string;
     /** How often (ms) to poll the backend for new log entries. Default 1500. */
     pollInterval?: number;
-    /** Max entries shown in the window. Default 100. */
+    /** Max entries shown in the window. Default 500. */
     maxEntries?: number;
 }
 
@@ -46,7 +46,7 @@ function levelBadge(level: string): string {
 export function GeneratorLogWindow({
     genId,
     pollInterval = 1500,
-    maxEntries = 100,
+    maxEntries = 500,
 }: GeneratorLogWindowProps) {
     const [entries, setEntries] = useState<GeneratorLogEntry[]>([]);
     const [paused, setPaused] = useState(false);
@@ -96,7 +96,7 @@ export function GeneratorLogWindow({
     };
 
     return (
-        <Card className="bg-slate-900 border-slate-700 flex flex-col h-full">
+        <Card className="bg-slate-900 border-slate-700 flex flex-col">
             <CardHeader className="pb-2 pt-3 px-4 border-b border-slate-700/60">
                 <div className="flex items-center justify-between gap-2">
                     <CardTitle className="text-slate-200 text-sm font-semibold flex items-center gap-2">
@@ -109,8 +109,8 @@ export function GeneratorLogWindow({
                             onClick={() => setPaused(p => !p)}
                             title={paused ? 'Resume' : 'Pause'}
                             className={`p-1.5 rounded transition-colors ${paused
-                                    ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
-                                    : 'text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                                ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                                : 'text-slate-400 hover:bg-slate-700 hover:text-slate-200'
                                 }`}
                         >
                             {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
@@ -164,7 +164,7 @@ export function GeneratorLogWindow({
                 </div>
             </CardHeader>
 
-            <CardContent className="p-0 flex-1 overflow-hidden">
+            <CardContent className="p-0 overflow-hidden">
                 <div
                     ref={scrollRef}
                     onScroll={handleScroll}

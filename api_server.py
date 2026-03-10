@@ -191,7 +191,7 @@ sim_instance: Any = None
 # Per-generator circular log buffers  {gen_id: deque of log dicts}
 GEN_LOG_BUFFERS: Dict[str, collections.deque] = {}
 GEN_LOG_LOCK = threading.Lock()
-MAX_LOG_ENTRIES = 200
+MAX_LOG_ENTRIES = 500
 
 
 class GenLogHandler(logging.Handler):

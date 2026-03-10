@@ -210,7 +210,7 @@ function App() {
                   </div>
 
                   {/* Per-generator live event log */}
-                  <GeneratorLogWindow genId={currentGenerator.id} pollInterval={1500} maxEntries={100} />
+                  <GeneratorLogWindow genId={currentGenerator.id} pollInterval={1500} maxEntries={500} />
                 </>
               )}
             </>
