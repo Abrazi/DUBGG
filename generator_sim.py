@@ -6,6 +6,11 @@ import socket
 from typing import Optional, List, Dict
 from enum import IntEnum
 from pymodbus.server import StartAsyncTcpServer
+try:
+    from Loadbank import LoadBankSimulator
+except ImportError:
+    pass
+
 from pymodbus.datastore import ModbusSequentialDataBlock, ModbusDeviceContext, ModbusServerContext
 import asyncio
 import os
@@ -30,6 +35,9 @@ VOLTAGE_EPSILON = 10
 FREQUENCY_EPSILON = 0.1
 POWER_EPSILON = 10
 
+# Duration (ms) of the dead-bus connection window opened by a SSL710 rising edge
+DEAD_BUS_WINDOW_MS = 3000
+
 # IP address mappings
 GEN_IP_MAP = {
     "G1": "172.16.31.13", "G2": "172.16.31.23", "G3": "172.16.31.33", "G4": "172.16.31.43", "G5": "172.16.31.53",
@@ -41,6 +49,10 @@ GEN_IP_MAP = {
 
 SWG_IP_MAP = {
     "GPS1": "172.16.31.63", "GPS2": "172.16.32.63", "GPS3": "172.16.33.63", "GPS4": "172.16.34.63"
+}
+
+LB_IP_MAP = {
+    "LB1": "172.16.11.71", "LB2": "172.16.12.71", "LB3": "172.16.13.71", "LB4": "172.16.14.71"
 }
 
 
@@ -117,7 +129,7 @@ class GeneratorController:
         self.deadBusWindowTimer = 0
         self.ssl710PreviousValue = False
 
-        self.state = GeneratorState.STANDSTILL
+        # NOTE: self.state is a property — do not set it as a plain attribute here
         self.faultDetected = False
 
         self.SimulateFailToStart = False
@@ -331,7 +343,25 @@ class GeneratorController:
         self.SimulatedActivePower = 0
         self.SimulatedReactivePower = 0
 
+    @property
+    def state(self) -> GeneratorState:
+        """Always in sync with the string-based state machine (sm.state).
+
+        Using a property eliminates the dual-state tracking problem: any reader
+        (including SwitchgearController) sees the live value without needing a
+        separate manual assignment.
+        """
+        return STATE_MAP.get(self.sm.state, GeneratorState.STANDSTILL)
+
     def update_state(self):
+        """Deferred entry-action dispatcher.
+
+        sm.fire() updates sm.state immediately on the calling tick.  The
+        corresponding on_enter_* callback is invoked here on the *next* tick
+        (when last_processed_state diverges from sm.state).  This keeps entry
+        actions decoupled from the transition triggers and prevents re-running
+        them if update_state() is called multiple times in the same tick.
+        """
         if not self.SSL['SSL427_ServiceSWAuto']:
             return
         current_state = self.sm.state
@@ -341,8 +371,7 @@ class GeneratorController:
             if hasattr(self, func_name):
                 getattr(self, func_name)()
             self.last_processed_state = current_state
-            # Use safe mapping instead of direct enum lookup
-            self.state = STATE_MAP.get(current_state, GeneratorState.STANDSTILL)
+            # self.state is a property — no manual sync needed
         if self.faultDetected and self.sm.state != "fault":
             self.sm.fire("faultDetected")
             return
@@ -577,15 +606,20 @@ class GeneratorController:
             
             # Heartbeat supervision: if R192 Bit 7 (SSL708_ClockPulse_CMD) stops toggling
             # for longer than HEARTBEAT_TIMEOUT seconds, trigger automatic shutdown.
-            if not self.heartbeat_failed:
-                if (time.time() - self.last_heartbeat_time) > self.HEARTBEAT_TIMEOUT:
-                    self.log(f"HEARTBEAT TIMEOUT: R192 Bit 7 has not toggled for > {self.HEARTBEAT_TIMEOUT}s — initiating automatic shutdown")
-                    self.heartbeat_failed = True
-                    # Clear the demand command so update_state() will trigger the shutdown path
-                    self.SSL['SSL701_DemandModule_CMD'] = False
-                    # Directly fire shutdown for states that won't check SSL701 on their own
-                    if self.sm.state in ("starting", "running", "fastTransfer"):
-                        self.sm.fire("shutdown")
+            #
+            # We only *act* on the timeout when heartbeat_failed is False so that the
+            # shutdown fires exactly once.  heartbeat_failed is cleared by the
+            # restoration branch above (line ~565), so the guard will re-arm after
+            # the PLC reconnects and resumes heartbeating.
+            if (not self.heartbeat_failed and
+                    (time.time() - self.last_heartbeat_time) > self.HEARTBEAT_TIMEOUT):
+                self.log(f"HEARTBEAT TIMEOUT: R192 Bit 7 has not toggled for > {self.HEARTBEAT_TIMEOUT}s — initiating automatic shutdown")
+                self.heartbeat_failed = True
+                # Clear the demand command so update_state() will trigger the shutdown path
+                self.SSL['SSL701_DemandModule_CMD'] = False
+                # Directly fire shutdown for states that won't check SSL701 on their own
+                if self.sm.state in ("starting", "running", "fastTransfer"):
+                    self.sm.fire("shutdown")
 
             # Update state machine and flags first
             self.validate_ssl_flags()
@@ -674,7 +708,7 @@ class GeneratorController:
                     self.log("CB CLOSED via SSL703_MainsCBClosed_CMD")
 
             if not self.ssl710PreviousValue and self.SSL['SSL710_OthGCBClosedandExcitOn_CMD']:
-                self.deadBusWindowTimer = 3000
+                self.deadBusWindowTimer = DEAD_BUS_WINDOW_MS
                 self.log("SSL710 rising edge - 3s dead bus window opened")
             self.ssl710PreviousValue = self.SSL['SSL710_OthGCBClosedandExcitOn_CMD']
 
@@ -693,6 +727,14 @@ class SwitchgearController:
         self.id = gps_id
         self.register_base = register_base
         self.ip_address = ip_address
+        self._last_event_log: Optional[str] = None
+
+    def log(self, message: str):
+        """Log switchgear events — deduplicates consecutive identical messages."""
+        log_msg = f"[{self.id}] {message}"
+        if log_msg != self._last_event_log:
+            logger.info(log_msg)
+            self._last_event_log = log_msg
 
     def tick(self, generators: List[GeneratorController], datastore: ModbusDeviceContext):
         
@@ -727,20 +769,85 @@ class SwitchgearController:
             # Fix: True proportional distribution based on generator capacity
             total_capacity = sum(gen.NominalPower for gen in online)
             if total_demand > total_capacity:
-                logger.warning(f"[{self.id}] Overload: Demand {total_demand} kW exceeds capacity {total_capacity} kW")
+                self.log(f"Overload: Demand {total_demand} kW exceeds capacity {total_capacity} kW")
                 # Distribute proportionally to each generator's capacity
                 for gen in online:
                     proportional_share = total_demand * (gen.NominalPower / total_capacity)
-                    gen.rSetpointPower = min(proportional_share, gen.NominalPower)
+                    with gen.lock:
+                        gen.rSetpointPower = min(proportional_share, gen.NominalPower)
             else:
                 # Normal operation: distribute proportionally to capacity
                 for gen in online:
                     proportional_share = total_demand * (gen.NominalPower / total_capacity)
-                    gen.rSetpointPower = proportional_share
+                    with gen.lock:
+                        gen.rSetpointPower = proportional_share
         else:
             per_load = 0
         
         datastore.setValues(3, self.register_base + 901, [count])
+
+class LoadBankController:
+    def __init__(self, lb_id: str, register_base: int, ip_address: str = ""):
+        self.id = lb_id
+        self.register_base = register_base
+        self.ip_address = ip_address
+        self._last_event_log: Optional[str] = None
+        self.simulator = LoadBankSimulator()
+        self.lock = threading.Lock()
+
+    def log(self, message: str):
+        log_msg = f"[{self.id}] {message}"
+        if log_msg != self._last_event_log:
+            logger.info(log_msg)
+            self._last_event_log = log_msg
+
+    def tick(self, datastore: ModbusDeviceContext):
+        with self.lock:
+            # Sync simulator -> datastore
+            # Instrumentation registers (1001-1024)
+            instrumentation_vals = []
+            for i in range(1001, 1025):
+                instrumentation_vals.append(self.simulator.read_register(i))
+            datastore.setValues(3, self.register_base + 1001, instrumentation_vals)
+
+            # Load Bank Status registers (1101-1105)
+            status_vals = []
+            for i in range(1101, 1106):
+                status_vals.append(self.simulator.read_register(i))
+            datastore.setValues(3, self.register_base + 1101, status_vals)
+
+            # Capacity registers (1201-1206)
+            cap_vals = []
+            for i in range(1201, 1207):
+                cap_vals.append(self.simulator.read_register(i))
+            datastore.setValues(3, self.register_base + 1201, cap_vals)
+
+            # Apply registers (Now, Next) (1601-1611)
+            apply_vals = []
+            for i in range(1601, 1612):
+                apply_vals.append(self.simulator.read_register(i))
+            datastore.setValues(3, self.register_base + 1601, apply_vals)
+
+            # Control registers (1701-1711)
+            control_vals = []
+            for i in range(1701, 1712):
+                control_vals.append(self.simulator.read_register(i))
+            datastore.setValues(3, self.register_base + 1701, control_vals)
+
+            # Note: For bidirectional sync where Modbus TCP clients can WRITE to datastore
+            # and affect the simulator, we would read specific registers from datastore
+            # back into `self.simulator`. However, currently the instructions control the LB
+            # via API methods explicitly calling simulator functions. If a Modbus hardware client
+            # writes to the datastore holding registers 1701-1711, we should sync them back:
+            ds_control_vals = datastore.getValues(3, self.register_base + 1701, count=11)
+            if isinstance(ds_control_vals, list) and len(ds_control_vals) == 11:
+                ds_ctrl_reg = ds_control_vals[0]
+                # Compare bit 3 (Accept) and bit 2 (Reject) in 1701
+                if ds_ctrl_reg & 0x08: # LoadAccept bit set by remote
+                    # We might handle loading logic here if needed, but for now we
+                    # trust the Python API interface directly.
+                    pass
+
 
 
 class IndividualModbusServer:
@@ -765,7 +872,7 @@ class IndividualModbusServer:
         self._server_startup_error: Optional[str] = None  # Tracks startup errors
         
     def _initialize_registers(self) -> ModbusDeviceContext:
-        num_registers = 1000
+        num_registers = 2000
         hr = ModbusSequentialDataBlock(0, [0] * num_registers)
         store = ModbusDeviceContext(
             di=ModbusSequentialDataBlock(0, [0] * num_registers),
@@ -889,8 +996,10 @@ class IndividualModbusServer:
                         elif isinstance(self.controller, SwitchgearController):
                             # Switchgear needs generator list - will be set by parent
                             pass
+                        elif isinstance(self.controller, LoadBankController):
+                            self.controller.tick(self.datastore)
             except Exception as e:
-                logger.error(f"Simulation error for {self.name}: {e}")
+                logger.error(f"Simulation error for {self.name}: {e}", exc_info=True)
             time.sleep(0.1)
 
     def disable_modbus(self):
@@ -1085,6 +1194,7 @@ class ModbusTCPSlaveGenRun:
         self.running = False
         self.generators: List[GeneratorController] = []
         self.switchgears: List[SwitchgearController] = []
+        self.loadbanks: List[LoadBankController] = []
         self.servers: List[IndividualModbusServer] = []
         
         # Create generators with register base 0 (each has own server)
@@ -1109,7 +1219,18 @@ class ModbusTCPSlaveGenRun:
             server = IndividualModbusServer(gps_id, ip_address, self.port, swg)
             self.servers.append(server)
         
-        logger.info(f"Initialized {len(self.generators)} generators and {len(self.switchgears)} switchgears")
+        # Create loadbanks with register base 0 (each has own server)
+        for i in range(1, 5):
+            lb_id = f"LB{i}"
+            ip_address = LB_IP_MAP.get(lb_id, "127.0.0.1")
+            lb = LoadBankController(lb_id, register_base=0, ip_address=ip_address)
+            self.loadbanks.append(lb)
+            
+            # Create individual server for this loadbank
+            server = IndividualModbusServer(lb_id, ip_address, self.port, lb)
+            self.servers.append(server)
+
+        logger.info(f"Initialized {len(self.generators)} generators, {len(self.switchgears)} switchgears, and {len(self.loadbanks)} load banks")
 
     def _global_simulation_loop(self):
         """Coordinate switchgear logic across all generators"""
@@ -1121,7 +1242,7 @@ class ModbusTCPSlaveGenRun:
                         with swg_server.datastore_lock:
                             swg_server.controller.tick(self.generators, swg_server.datastore)
             except Exception as e:
-                logger.error(f"Global simulation error: {e}")
+                logger.error(f"Global simulation error: {e}", exc_info=True)
             time.sleep(self.scan_interval)
 
     def check_network_availability(self) -> bool:
@@ -1130,7 +1251,7 @@ class ModbusTCPSlaveGenRun:
         Logs errors if an IP is occupied by another device on the network.
         Asks user to select an adapter to add missing IPs.
         """
-        all_ips = list(GEN_IP_MAP.values()) + list(SWG_IP_MAP.values())
+        all_ips = list(GEN_IP_MAP.values()) + list(SWG_IP_MAP.values()) + list(LB_IP_MAP.values())
         unique_ips = sorted(list(set(all_ips)))
         
         try:

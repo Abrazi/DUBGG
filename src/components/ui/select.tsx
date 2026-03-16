@@ -23,12 +23,12 @@ export const SelectContent: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ 
   </div>
 );
 
-export const SelectItem: React.FC<{ value: string; className?: string }> = ({ value, className = '', children }) => (
+export const SelectItem: React.FC<{ value: string; className?: string; children?: React.ReactNode }> = ({ value, className = '', children }) => (
   <div className={className} data-value={value}>
     {children}
   </div>
 );
 
-export const SelectValue: React.FC<{ placeholder?: string }> = ({ placeholder, children }) => (
+export const SelectValue: React.FC<{ placeholder?: string; children?: React.ReactNode }> = ({ placeholder, children }) => (
   <span>{children || placeholder}</span>
 );

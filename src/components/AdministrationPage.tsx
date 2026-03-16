@@ -126,7 +126,7 @@ export function AdministrationPage() {
                                             {!server.modbusDisabled && server.is_port_open ? (
                                                 <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                                             ) : server.modbusDisabled ? (
-                                                <XCircle className="w-5 h-5 text-orange-500" title="Device failure simulation active" />
+                                                <div title="Device failure simulation active"><XCircle className="w-5 h-5 text-orange-500" /></div>
                                             ) : (
                                                 <XCircle className="w-5 h-5 text-red-500" />
                                             )}

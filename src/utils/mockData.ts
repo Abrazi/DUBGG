@@ -1,9 +1,6 @@
 import { SystemStatus, Alarm, ControlParameter } from '../types/hmi';
 
 export const generateMockStatus = (): SystemStatus => ({
-  isRunning: true,
-  uptime: Math.floor(Math.random() * 100000) + 50000,
-  cpuUsage: Math.floor(Math.random() * 60) + 20,
   memoryUsage: Math.floor(Math.random() * 40) + 30,
   temperature: Math.floor(Math.random() * 30) + 40,
   pressure: Math.floor(Math.random() * 50) + 100,

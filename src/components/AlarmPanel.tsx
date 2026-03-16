@@ -48,7 +48,7 @@ export function AlarmPanel({ alarms, onAcknowledge, onClear, onClearAll }: Alarm
             </span>
           )}
         </CardTitle>
-        <Button onClick={onClearAll} variant="outline" size="sm" className="bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600">
+        <Button onClick={onClearAll} className="px-3 py-1 text-sm rounded bg-slate-700 text-slate-300 border border-slate-600 hover:bg-slate-600">
           Clear All
         </Button>
       </CardHeader>
@@ -74,17 +74,13 @@ export function AlarmPanel({ alarms, onAcknowledge, onClear, onClearAll }: Alarm
                       <div className="flex gap-2">
                         <Button
                           onClick={() => onAcknowledge(alarm.id)}
-                          size="sm"
-                          variant="outline"
-                          className="bg-transparent border-current hover:bg-current/20"
+                          className="p-1 rounded bg-transparent border border-current hover:bg-current/20"
                         >
                           <Check className="w-4 h-4" />
                         </Button>
                         <Button
                           onClick={() => onClear(alarm.id)}
-                          size="sm"
-                          variant="outline"
-                          className="bg-transparent border-current hover:bg-current/20"
+                          className="p-1 rounded bg-transparent border border-current hover:bg-current/20"
                         >
                           <X className="w-4 h-4" />
                         </Button>
@@ -115,9 +111,7 @@ export function AlarmPanel({ alarms, onAcknowledge, onClear, onClearAll }: Alarm
                       </div>
                       <Button
                         onClick={() => onClear(alarm.id)}
-                        size="sm"
-                        variant="outline"
-                        className="bg-transparent border-current hover:bg-current/20"
+                        className="p-1 rounded bg-transparent border border-current hover:bg-current/20"
                       >
                         <X className="w-4 h-4" />
                       </Button>

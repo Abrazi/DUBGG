@@ -22,7 +22,8 @@ try:
         ModbusTCPSlaveGenRun,
         GeneratorState,
         GeneratorController,
-        SwitchgearController
+        SwitchgearController,
+        LoadBankController
     )
 except ImportError:
     print("Error: Could not import 'generator_sim'. Please save the provided code as 'generator_sim.py'")
@@ -193,6 +194,9 @@ GEN_LOG_BUFFERS: Dict[str, collections.deque] = {}
 GEN_LOG_LOCK = threading.Lock()
 MAX_LOG_ENTRIES = 500
 
+# Per-loadbank circular log buffers
+LB_LOG_BUFFERS: Dict[str, collections.deque] = {}
+
 
 class GenLogHandler(logging.Handler):
     """Custom logging handler that captures generator-specific log messages
@@ -211,9 +215,14 @@ class GenLogHandler(logging.Handler):
                     "message": msg,
                 }
                 with GEN_LOG_LOCK:
-                    if gen_id not in GEN_LOG_BUFFERS:
-                        GEN_LOG_BUFFERS[gen_id] = collections.deque(maxlen=MAX_LOG_ENTRIES)
-                    GEN_LOG_BUFFERS[gen_id].append(entry)
+                    if gen_id.startswith('LB'):
+                         if gen_id not in LB_LOG_BUFFERS:
+                            LB_LOG_BUFFERS[gen_id] = collections.deque(maxlen=MAX_LOG_ENTRIES)
+                         LB_LOG_BUFFERS[gen_id].append(entry)
+                    else:
+                        if gen_id not in GEN_LOG_BUFFERS:
+                            GEN_LOG_BUFFERS[gen_id] = collections.deque(maxlen=MAX_LOG_ENTRIES)
+                        GEN_LOG_BUFFERS[gen_id].append(entry)
 
 
 # Install the custom handler on the root logger so it captures everything
@@ -238,6 +247,11 @@ class ConfigRequest(BaseModel):
     stop_delay: Optional[int] = None
     # allow service mode change: 'off','manual','auto'
     service_mode: Optional[str] = None
+
+class LoadBankSelectRequest(BaseModel):
+    resistive_kW: int
+    inductive_kVAr: int = 0
+    capacitive_kVAr: int = 0
 
 # Create the router
 router = APIRouter()
@@ -583,6 +597,12 @@ def get_admin_status():
         except Exception:
             is_port_open = False
 
+        stype = "generator"
+        if server.name.startswith("GPS"):
+            stype = "switchgear"
+        elif server.name.startswith("LB"):
+            stype = "loadbank"
+
         server_statuses.append({
             "name": server.name,
             "ip": server.ip_address,
@@ -590,7 +610,7 @@ def get_admin_status():
             "is_running": server.running,
             "is_port_open": is_port_open,
             "modbusDisabled": server.modbus_disabled,
-            "type": "generator" if server.name.startswith('G') and not server.name.startswith('GPS') else "switchgear"
+            "type": stype
         })
 
     # System metrics
@@ -619,6 +639,148 @@ def get_generator_logs(gen_id: str, limit: int = 100):
     # Return newest-first, up to `limit`
     return list(reversed(entries[-limit:]))  # pyre-ignore
 
+
+@router.get("/loadbanks")
+def get_loadbanks():
+    """Get status of all loadbanks"""
+    if not sim_instance:
+        return []
+
+    lb_list = []
+    for lb in getattr(sim_instance, "loadbanks", []):
+        server = next((s for s in sim_instance.servers if s.name == lb.id), None)
+        modbus_disabled = server.modbus_disabled if server else False
+        
+        status = lb.simulator.get_load_status()
+        lb_list.append({
+            "id": lb.id,
+            "load_applied": status["load_applied"],
+            "inductive_load_applied": status["inductive_load_applied"],
+            "capacitive_load_applied": status["capacitive_load_applied"],
+            "control_on": status["control_on"],
+            "status_bits": status["status_bits"],
+            "error_bits": status["error_bits"],
+            "activePower": lb.simulator.read_register(1019) / 10.0,
+            "reactivePower": lb.simulator.read_register(1020) / 10.0,
+            "apparentPower": lb.simulator.read_register(1021) / 10.0,
+            "powerFactor": lb.simulator.read_register(1022) / 100.0,
+            "l1l2Voltage": lb.simulator.read_register(1006) / 10.0,
+            "frequency": lb.simulator.read_register(1015) / 100.0,
+            "modbusDisabled": modbus_disabled
+        })
+    return lb_list
+
+@router.get("/loadbanks/{lb_id}")
+def get_loadbank(lb_id: str):
+    """Get status of a specific loadbank"""
+    if not sim_instance:
+        return None
+    for lb in getattr(sim_instance, "loadbanks", []):
+        if lb.id == lb_id:
+            server = next((s for s in sim_instance.servers if s.name == lb.id), None)
+            modbus_disabled = server.modbus_disabled if server else False
+            
+            status = lb.simulator.get_load_status()
+            return {
+                "id": lb.id,
+                "load_applied": status["load_applied"],
+                "inductive_load_applied": status["inductive_load_applied"],
+                "capacitive_load_applied": status["capacitive_load_applied"],
+                "control_on": status["control_on"],
+                "status_bits": status["status_bits"],
+                "error_bits": status["error_bits"],
+                "activePower": lb.simulator.read_register(1019) / 10.0,
+                "reactivePower": lb.simulator.read_register(1020) / 10.0,
+                "apparentPower": lb.simulator.read_register(1021) / 10.0,
+                "powerFactor": lb.simulator.read_register(1022) / 100.0,
+                "l1l2Voltage": lb.simulator.read_register(1006) / 10.0,
+                "frequency": lb.simulator.read_register(1015) / 100.0,
+                "modbusDisabled": modbus_disabled
+            }
+    return None
+
+@router.post("/loadbanks/{lb_id}/command")
+def send_loadbank_command(lb_id: str, req: CommandRequest):
+    """Send command to a loadbank (enable_modbus_control, disable_modbus_control, apply_load, reject_load)"""
+    if not sim_instance:
+        return {"status": "error", "message": "Simulation not running"}
+        
+    target_lb = next((lb for lb in getattr(sim_instance, "loadbanks", []) if lb.id == lb_id), None)
+    if not target_lb:
+        return {"status": "error", "message": "Loadbank not found"}
+
+    with target_lb.lock:
+        if req.command == "enable_modbus_control":
+            target_lb.simulator.enable_modbus_control()
+            logger.info(f"[{lb_id}] Modbus control enabled")
+        elif req.command == "disable_modbus_control":
+            target_lb.simulator.disable_modbus_control()
+            logger.info(f"[{lb_id}] Modbus control disabled")
+        elif req.command == "apply_load":
+            success = target_lb.simulator.apply_load()
+            if success:
+                logger.info(f"[{lb_id}] Load applied")
+            else:
+                return {"status": "error", "message": "Failed to apply load (is control enabled?)"}
+        elif req.command == "reject_load":
+            success = target_lb.simulator.reject_load()
+            if success:
+                logger.info(f"[{lb_id}] Load rejected")
+            else:
+                return {"status": "error", "message": "Failed to reject load (is control enabled?)"}
+        else:
+            return {"status": "error", "message": "Unknown command"}
+            
+    return {"status": "success", "message": f"Command '{req.command}' sent to {lb_id}"}
+
+@router.post("/loadbanks/{lb_id}/select_load")
+def select_loadbank_load(lb_id: str, req: LoadBankSelectRequest):
+    """Select load amounts for a loadbank"""
+    if not sim_instance:
+        return {"status": "error", "message": "Simulation not running"}
+        
+    target_lb = next((lb for lb in getattr(sim_instance, "loadbanks", []) if lb.id == lb_id), None)
+    if not target_lb:
+        return {"status": "error", "message": "Loadbank not found"}
+
+    with target_lb.lock:
+        target_lb.simulator.select_load(req.resistive_kW, req.inductive_kVAr, req.capacitive_kVAr)
+        logger.info(f"[{lb_id}] Load selected: {req.resistive_kW}kW, {req.inductive_kVAr}kVArL, {req.capacitive_kVAr}kVArC")
+            
+    return {"status": "success", "message": f"Load selected for {lb_id}"}
+
+@router.post("/loadbanks/{lb_id}/modbus")
+def set_loadbank_modbus_state(lb_id: str, req: ModbusDeviceRequest):
+    """Enable or disable the Modbus TCP server for a loadbank to simulate device failure."""
+    if not sim_instance:
+        return {"status": "error", "message": "Simulation not running"}
+    server = next((s for s in sim_instance.servers if s.name == lb_id), None)
+    if not server:
+        return {"status": "error", "message": f"Server not found for {lb_id}"}
+    
+    if req.enabled:
+        server.enable_modbus()
+        time.sleep(0.5)
+        if not server.modbus_disabled:
+            logger.info(f"[{lb_id}] Modbus device ENABLED via API")
+            return {"status": "success", "message": f"{lb_id} Modbus server online"}
+        else:
+            return {"status": "error", "message": f"{lb_id} Modbus server failed to start"}
+    else:
+        server.disable_modbus()
+        logger.info(f"[{lb_id}] Modbus device DISABLED via API")
+        return {"status": "success", "message": f"{lb_id} Modbus server disabled"}
+
+@router.get("/loadbanks/{lb_id}/logs")
+def get_loadbank_logs(lb_id: str, limit: int = 100):
+    """Return recent log entries for a specific loadbank."""
+    with GEN_LOG_LOCK:
+        buf = LB_LOG_BUFFERS.get(lb_id)
+        if buf is None:
+            return []
+        entries = list(buf)
+    # Return newest-first, up to `limit`
+    return list(reversed(entries[-limit:]))
 
 app.include_router(router)
 

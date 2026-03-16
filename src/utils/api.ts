@@ -140,3 +140,99 @@ export const setModbusEnabled = async (
     return { success: false, message: String(error) };
   }
 };
+
+export const fetchLoadbankLogs = async (
+  id: string,
+  limit = 100
+): Promise<GeneratorLogEntry[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/logs?limit=${limit}`);
+    if (!response.ok) throw new Error('Failed to fetch load bank logs');
+    return await response.json();
+  } catch (error) {
+    console.error('LB Logs Error:', error);
+    return [];
+  }
+};
+
+// Load Bank APIs
+import { LoadBankStatus } from '../types/loadbank';
+
+export const fetchAllLoadbanks = async (): Promise<LoadBankStatus[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/loadbanks`);
+    if (!response.ok) throw new Error('Failed to fetch load banks');
+    return await response.json();
+  } catch (error) {
+    console.error('API Error:', error);
+    return [];
+  }
+};
+
+export const fetchLoadbank = async (id: string): Promise<LoadBankStatus | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}`);
+    if (!response.ok) throw new Error('Failed to fetch load bank');
+    return await response.json();
+  } catch (error) {
+    console.error('API Error:', error);
+    return null;
+  }
+};
+
+export type LBCommand = 'enable_modbus_control' | 'disable_modbus_control' | 'apply_load' | 'reject_load';
+
+export const sendLoadbankCommand = async (id: string, command: LBCommand): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    });
+    return response.ok;
+  } catch (error) {
+    console.error('Command Error:', error);
+    return false;
+  }
+};
+
+export const selectLoadbankLoad = async (
+  id: string, 
+  load: { resistive_kW: number; inductive_kVAr?: number; capacitive_kVAr?: number }
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/select_load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(load),
+    });
+    return response.ok;
+  } catch (error) {
+    console.error('Select Load Error:', error);
+    return false;
+  }
+};
+
+export const setLoadbankModbusEnabled = async (
+  id: string,
+  enabled: boolean
+): Promise<{ success: boolean; message: string }> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/modbus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    let result: ApiResult = { status: 'error', message: 'Unknown' };
+    try {
+      result = await response.json();
+    } catch {
+      // non-json response
+    }
+    const success = response.ok && result.status === 'success';
+    return { success, message: result.message || '' };
+  } catch (error) {
+    console.error('LB Modbus Enable/Disable Error:', error);
+    return { success: false, message: String(error) };
+  }
+};

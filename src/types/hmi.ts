@@ -1,7 +1,4 @@
 export interface SystemStatus {
-  isRunning: boolean;
-  uptime: number;
-  cpuUsage: number;
   memoryUsage: number;
   temperature: number;
   pressure: number;
