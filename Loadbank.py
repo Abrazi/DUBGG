@@ -1,5 +1,10 @@
 import time
-from typing import List, Dict
+import logging
+import threading
+from typing import List, Dict, Optional
+from pymodbus.datastore import ModbusDeviceContext
+
+logger = logging.getLogger(__name__)
 
 class LoadBankSimulator:
     def __init__(self):
@@ -107,7 +112,44 @@ class LoadBankSimulator:
     
     def write_register(self, address: int, value: int) -> bool:
         """Write to a single register (always allow, clamp to 16-bit)"""
-        self.registers[address] = value & 0xFFFF
+        val = value & 0xFFFF
+        self.registers[address] = val
+        
+        # Cross-sync operating voltage and frequency across mapping variants
+        if address == 1704 and self.read_register(1300) != val:
+            self.write_register(1300, val)
+        elif address == 1300 and self.read_register(1704) != val:
+            self.write_register(1704, val)
+            
+        if address == 1705 and self.read_register(1301) != val:
+            self.write_register(1301, val)
+        elif address == 1301 and self.read_register(1705) != val:
+            self.write_register(1705, val)
+            
+        # Dynamically update instrumentation voltages if operational voltage changes
+        if address in (1300, 1704):
+            # val is Operating Voltage * 10 (e.g., 4000 for 400V L-L)
+            self.registers[1005] = val
+            self.registers[1006] = val
+            self.registers[1007] = val
+            self.registers[1022] = val
+            self.registers[1023] = val
+            
+            # L-N theoretical voltage (L-L / sqrt(3))
+            v_ln = int(val / 1.732)
+            self.registers[1001] = v_ln
+            self.registers[1002] = v_ln
+            self.registers[1003] = v_ln
+            self.registers[1004] = v_ln
+            
+            # Re-calculate currents based on new voltage (only if a load is applied)
+            if self.load_applied > 0:
+                self.apply_load()
+                
+        # Dynamically update frequency instrumentation
+        if address in (1301, 1705):
+            self.registers[1014] = val
+            
         return True
     
     def read_multiple_registers(self, start_address: int, count: int) -> List[int]:
@@ -139,14 +181,14 @@ class LoadBankSimulator:
     def enable_modbus_control(self):
         """Enable Modbus control (set ControlOn bit)"""
         current_value = self.read_register(1700)
-        new_value = current_value | 0x8000  # Set MSB
+        new_value = (current_value & ~0x4000) | 0x8000  # Clear disable, set enable
         self.write_register(1700, new_value)
         self.control_on = True
         
     def disable_modbus_control(self):
         """Disable Modbus control (set ControlOff bit)"""
         current_value = self.read_register(1700)
-        new_value = current_value | 0x4000  # Set second MSB
+        new_value = (current_value & ~0x8000) | 0x4000  # Clear enable, set disable
         self.write_register(1700, new_value)
         self.control_on = False
         
@@ -166,19 +208,38 @@ class LoadBankSimulator:
         if not self.control_on:
             return False
             
-        # Set Accept bit in control register
         current_value = self.read_register(1700)
-        new_value = current_value | 0x08   # Set LoadAccept bit (bit 3)
-        self.write_register(1700, new_value)
-        
-        # Update applied load values (in kW)
+        if current_value & 0x08:  # Already accepted, avoid duplicate triggers
+            return False
+            
+        # Read selected load
         w_selected = self.read_register(1701)
         varl_selected = self.read_register(1702)
         varc_selected = self.read_register(1703)
         
-        self.load_applied = float(w_selected) / 10
-        self.inductive_load_applied = float(varl_selected) / 10
-        self.capacitive_load_applied = float(varc_selected) / 10
+        # Validate and clamp against capacity limits
+        max_kw = self.read_register(1203)
+        max_kvarl = self.read_register(1204)
+        max_kvarc = self.read_register(1205)
+        
+        if w_selected > max_kw:
+            w_selected = max_kw
+            self.write_register(1701, w_selected)
+        if varl_selected > max_kvarl:
+            varl_selected = max_kvarl
+            self.write_register(1702, varl_selected)
+        if varc_selected > max_kvarc:
+            varc_selected = max_kvarc
+            self.write_register(1703, varc_selected)
+            
+        # Set Accept bit in control register
+        new_value = current_value | 0x08   # Set LoadAccept bit (bit 3)
+        self.write_register(1700, new_value)
+        
+        # Update applied load values (in kW)
+        self.load_applied = float(w_selected) / 10.0
+        self.inductive_load_applied = float(varl_selected) / 10.0
+        self.capacitive_load_applied = float(varc_selected) / 10.0
         
         # Update applied registers (Now = selected, Next remains selected)
         self.write_register(1600, w_selected)  # W Now
@@ -189,21 +250,26 @@ class LoadBankSimulator:
         self.registers[1018] = w_selected  # Total Active Power *10
         reactive_net = varl_selected - varc_selected
         reactive_abs = abs(reactive_net)
-        self.registers[1019] = reactive_abs  # Total Reactive Power *10 (simplified)
+        self.registers[1019] = reactive_abs  # Total Reactive Power *10
         apparent = int((w_selected ** 2 + reactive_abs ** 2) ** 0.5)
         self.registers[1020] = apparent  # Total Apparent Power *10
         pf = int(w_selected * 100 / apparent) if apparent > 0 else 1000
-        self.registers[1021] = pf  # Power Factor *100 (max 1000?)
+        self.registers[1021] = pf  # Power Factor *100
         
         # Update currents (approximate 3-phase, L-L voltage)
-        v_ll = float(self.registers[1005]) / 10  # L1L2 Voltage in V
-        apparent_kva = float(apparent) / 10
-        pf_val = float(pf) / 100
-        i_app = int(apparent_kva * 1000 / (1.732 * v_ll) * 10)  # Apparent current *10 per phase
-        i_act = int(i_app * pf_val)  # Active current *10 per phase
+        v_ll = float(self.registers[1005]) / 10.0
+        if v_ll <= 0.1:
+            v_ll = 400.0  # Safe fallback to prevent ZeroDivisionError
+            
+        apparent_kva = float(apparent) / 10.0
+        pf_val = float(pf) / 100.0
+        
+        i_app = int((apparent_kva * 1000) / (1.732 * v_ll))  # Apparent current base arithmetic
+        i_app_scaled = int(i_app * 10) # 10x scaled resolution 
+        i_act = int(i_app_scaled * pf_val)  # Active current scaled
         
         self.registers[1008] = self.registers[1009] = self.registers[1010] = i_act
-        self.registers[1015] = self.registers[1016] = self.registers[1017] = i_app
+        self.registers[1015] = self.registers[1016] = self.registers[1017] = i_app_scaled
         self.registers[1011] = self.registers[1012] = self.registers[1013] = 0  # Reactive currents (simplified)
         
         return True
@@ -237,6 +303,101 @@ class LoadBankSimulator:
         self.registers[1015] = self.registers[1016] = self.registers[1017] = 0
         
         return True
+
+# ---------------------------------------------------------------------------
+# Load bank controller (thin bridge to LoadBankSimulator)
+# ---------------------------------------------------------------------------
+class LoadBankController:
+    def __init__(self, lb_id: str, register_base: int, ip_address: str = ""):
+        self.id = lb_id
+        self.register_base = register_base
+        self.ip_address = ip_address
+        self._last_event_log: Optional[str] = None
+        self.simulator = LoadBankSimulator()
+        self.lock = threading.Lock()
+
+    def log(self, message: str):
+        log_msg = f"[{self.id}] {message}"
+        if log_msg != self._last_event_log:
+            logger.info(log_msg)
+            self._last_event_log = log_msg
+
+    def tick(self, datastore: ModbusDeviceContext):
+        with self.lock:
+            # First tick initialisation: Push all simulator defaults into the Modbus datastore
+            # so we don't mistake uninitialised 0 values as Modbus client writes!
+            if getattr(self, '_first_tick', True):
+                self._first_tick = False
+                write_ranges = [
+                    (1000, 25), (1100, 6), (1200, 7), (1300, 3),
+                    (1400, 7), (1500, 7), (1600, 12), (1700, 12)
+                ]
+                for start, count in write_ranges:
+                    block_vals = [self.simulator.read_register(start + i) for i in range(count)]
+                    datastore.setValues(3, self.register_base + start, block_vals)
+                return
+
+            # 1. READ datastore for external Modbus client writes FIRST
+            # By reading first, we ensure we don't overwrite client changes before processing them.
+            sync_ranges = [
+                (1200, 7),   # Capacity and Resolution
+                (1300, 3),   # Operating V/Hz
+                (1400, 7),   # Configuration Base
+                (1500, 7),   # Controls
+                (1600, 12),  # Target Values (W Next, etc.)
+                (1700, 12)   # Exec Control Word and Ops Config
+            ]
+            
+            for start, count in sync_ranges:
+                ds_vals = datastore.getValues(3, self.register_base + start, count=count)
+                if isinstance(ds_vals, list) and len(ds_vals) == count:
+                    for i in range(count):
+                        addr = start + i
+                        datastore_val = ds_vals[i]
+                        # Sync datastore values over to simulator if the Modbus Client changed them
+                        if datastore_val != self.simulator.read_register(addr):
+                            self.simulator.write_register(addr, datastore_val)
+                            
+            # Process Apply / Reject load commands specifically from 1700
+            control_word = self.simulator.read_register(1700)
+            
+            # Handle Enable / Disable commands
+            if control_word & 0x4000:  # Modbus Control Disable
+                self.simulator.disable_modbus_control()
+                self.simulator.reject_load()
+            elif control_word & 0x8000:  # Modbus Control Enable
+                if not self.simulator.control_on:
+                    self.simulator.enable_modbus_control()
+                    
+            if control_word & 0x08:  # LoadAccept bit set by remote
+                self.simulator.apply_load()
+                # Clear Accept bit locally to avoid infinite apply
+                new_ctrl = self.simulator.read_register(1700) & ~0x08
+                self.simulator.write_register(1700, new_ctrl)
+            elif control_word & 0x04:  # LoadReject bit set by remote
+                self.simulator.reject_load()
+                # Clear Reject bit locally
+                new_ctrl = self.simulator.read_register(1700) & ~0x04
+                self.simulator.write_register(1700, new_ctrl)
+
+            # 2. WRITE back to datastore (sync simulator state to Modbus)
+            write_ranges = [
+                (1000, 25),
+                (1100, 6),
+                (1200, 7),
+                (1300, 3),
+                (1400, 7),
+                (1500, 7),
+                (1600, 12),
+                (1700, 12)
+            ]
+            
+            for start, count in write_ranges:
+                block_vals = []
+                for i in range(start, start + count):
+                    block_vals.append(self.simulator.read_register(i))
+                datastore.setValues(3, self.register_base + start, block_vals)
+
 
 # Example usage function
 def simulate_load_bank_operations():

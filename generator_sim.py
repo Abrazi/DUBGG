@@ -23,7 +23,7 @@ import socket
 from typing import Optional, List
 from pymodbus.server import StartAsyncTcpServer  # noqa: F401  (kept for compatibility)
 try:
-    from Loadbank import LoadBankSimulator
+    from Loadbank import LoadBankSimulator, LoadBankController
 except ImportError:
     pass
 
@@ -53,6 +53,10 @@ from generator import (          # noqa: F401
     LOG_LEVEL,
 )
 from switchgear import SwitchgearController  # noqa: F401
+try:
+    from Loadbank import LoadBankController  # noqa: F401
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -74,72 +78,6 @@ SWG_IP_MAP = {
 LB_IP_MAP = {
     "LB1": "172.16.11.71", "LB2": "172.16.12.71", "LB3": "172.16.13.71", "LB4": "172.16.14.71"
 }
-
-
-# ---------------------------------------------------------------------------
-# Load bank controller (thin bridge to LoadBankSimulator)
-# ---------------------------------------------------------------------------
-class LoadBankController:
-    def __init__(self, lb_id: str, register_base: int, ip_address: str = ""):
-        self.id = lb_id
-        self.register_base = register_base
-        self.ip_address = ip_address
-        self._last_event_log: Optional[str] = None
-        self.simulator = LoadBankSimulator()
-        self.lock = threading.Lock()
-
-    def log(self, message: str):
-        log_msg = f"[{self.id}] {message}"
-        if log_msg != self._last_event_log:
-            logger.info(log_msg)
-            self._last_event_log = log_msg
-
-    def tick(self, datastore: ModbusDeviceContext):
-        with self.lock:
-            # Sync simulator -> datastore
-            # Instrumentation registers (1001-1024)
-            instrumentation_vals = []
-            for i in range(1001, 1025):
-                instrumentation_vals.append(self.simulator.read_register(i))
-            datastore.setValues(3, self.register_base + 1001, instrumentation_vals)
-
-            # Load Bank Status registers (1101-1105)
-            status_vals = []
-            for i in range(1101, 1106):
-                status_vals.append(self.simulator.read_register(i))
-            datastore.setValues(3, self.register_base + 1101, status_vals)
-
-            # Capacity registers (1201-1206)
-            cap_vals = []
-            for i in range(1201, 1207):
-                cap_vals.append(self.simulator.read_register(i))
-            datastore.setValues(3, self.register_base + 1201, cap_vals)
-
-            # Apply registers (Now, Next) (1601-1611)
-            apply_vals = []
-            for i in range(1601, 1612):
-                apply_vals.append(self.simulator.read_register(i))
-            datastore.setValues(3, self.register_base + 1601, apply_vals)
-
-            # Control registers (1701-1711)
-            control_vals = []
-            for i in range(1701, 1712):
-                control_vals.append(self.simulator.read_register(i))
-            datastore.setValues(3, self.register_base + 1701, control_vals)
-
-            # Note: For bidirectional sync where Modbus TCP clients can WRITE to datastore
-            # and affect the simulator, we would read specific registers from datastore
-            # back into `self.simulator`. However, currently the instructions control the LB
-            # via API methods explicitly calling simulator functions. If a Modbus hardware client
-            # writes to the datastore holding registers 1701-1711, we should sync them back:
-            ds_control_vals = datastore.getValues(3, self.register_base + 1701, count=11)
-            if isinstance(ds_control_vals, list) and len(ds_control_vals) == 11:
-                ds_ctrl_reg = ds_control_vals[0]
-                # Compare bit 3 (Accept) and bit 2 (Reject) in 1701
-                if ds_ctrl_reg & 0x08:  # LoadAccept bit set by remote
-                    # We might handle loading logic here if needed, but for now we
-                    # trust the Python API interface directly.
-                    pass
 
 
 # ---------------------------------------------------------------------------
