@@ -207,7 +207,9 @@ class GeneratorController:
         }
 
         self.sm = StateMachine("standstill")
+        #If generator is standstill and "demand" is fired it moves to starting
         self.sm.add_transition("standstill", "demand", "starting")
+        #If generator is standstill and "faultDetected" is fired it moves to fault
         self.sm.add_transition("standstill", "faultDetected", "fault")
         self.sm.add_ignore("starting", "voltageReady")
         self.sm.add_ignore("starting", "freqReady")
