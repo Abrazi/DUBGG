@@ -10,7 +10,7 @@ class LoadBankSimulator:
         self._initialize_registers()
         
         # Simulation state variables
-        self.control_on = False
+        self.control_on = True
         self.load_applied = 0.0
         self.inductive_load_applied = 0.0
         self.capacitive_load_applied = 0.0
@@ -27,20 +27,20 @@ class LoadBankSimulator:
         self.registers[1005] = 4000   # L1L2 Voltage (400.0V * 10)
         self.registers[1006] = 4000   # L2L3 Voltage
         self.registers[1007] = 4000   # L3L1 Voltage
-        self.registers[1008] = 50     # L1 Active Current (5.0A * 10)
-        self.registers[1009] = 50     # L2 Active Current
-        self.registers[1010] = 50     # L3 Active Current
+        self.registers[1008] = 00     # L1 Active Current (5.0A * 10)
+        self.registers[1009] = 00     # L2 Active Current
+        self.registers[1010] = 00     # L3 Active Current
         self.registers[1011] = 0      # L1 Reactive Current
         self.registers[1012] = 0      # L2 Reactive Current
         self.registers[1013] = 0      # L3 Reactive Current
         self.registers[1014] = 5000   # Frequency (50.0Hz * 100)
-        self.registers[1015] = 57     # L1 Apparent Current (5.7A * 10)
-        self.registers[1016] = 57     # L2 Apparent Current
-        self.registers[1017] = 57     # L3 Apparent Current
-        self.registers[1018] = 120    # Total Active Power (12.0kW * 10)
+        self.registers[1015] = 0     # L1 Apparent Current (5.7A * 10)
+        self.registers[1016] = 0     # L2 Apparent Current
+        self.registers[1017] = 0     # L3 Apparent Current
+        self.registers[1018] = 0    # Total Active Power (12.0kW * 10)
         self.registers[1019] = 0      # Total Reactive Power
-        self.registers[1020] = 130    # Total Apparent Power (13.0kVA * 10)
-        self.registers[1021] = 92     # Power Factor (0.92 * 100)
+        self.registers[1020] = 0    # Total Apparent Power (13.0kVA * 10)
+        self.registers[1021] = 0     # Power Factor (0.92 * 100)
         self.registers[1022] = 2300   # Peak VL1N Voltage
         self.registers[1023] = 4000   # Peak VL1L2 Voltage
         
@@ -89,7 +89,7 @@ class LoadBankSimulator:
         self.registers[1610] = 0       # VArC Next - Capacitive Load Selected (*10)
         
         # Load Control registers (1700-1710)
-        self.registers[1700] = 0x00    # Control bits
+        self.registers[1700] = 0x8000  # Control bits (Enabled by default)
         self.registers[1701] = 0       # WSelected (*10)
         self.registers[1702] = 0       # VArLSelected (*10)
         self.registers[1703] = 0       # VArCSelected (*10)

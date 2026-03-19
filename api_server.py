@@ -786,5 +786,10 @@ app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
+    import argparse
+    parser = argparse.ArgumentParser(description="DUBGG API Server (dev mode)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8500, help="Bind port (default: 8500)")
+    args = parser.parse_args()
     # Disable uvicorn access log to avoid noisy per-request INFO lines
-    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)
+    uvicorn.run(app, host=args.host, port=args.port, access_log=False)
