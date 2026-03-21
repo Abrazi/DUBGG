@@ -75,8 +75,8 @@ async def lifespan(app: FastAPI):
 
     # Background Status Monitor for Events
     def status_monitor():
-        last_states = {}  # pyre-ignore
-        previous_clients = {}  # Track connected clients per server
+        last_states: Dict[str, Tuple[bool, bool]] = {}
+        previous_clients: Dict[str, set[Tuple[str, int]]] = {}  # Track connected clients per server
         first_run = True
         while True:
             try:
@@ -140,7 +140,7 @@ async def lifespan(app: FastAPI):
                                 hostname = client_ip
                             logger.info(f"[{server.name}] Client CONNECTED: {hostname} ({client_ip}:{client_port}) at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                         
-                        for client_ip, client_port in disconnected_clients:
+                        for client_ip, client_port in disconnected_clients:  # pyre-ignore
                             try:
                                 hostname = socket.gethostbyaddr(client_ip)[0]
                             except:
@@ -148,7 +148,7 @@ async def lifespan(app: FastAPI):
                             logger.info(f"[{server.name}] Client DISCONNECTED: {hostname} ({client_ip}:{client_port}) at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                         
                         last_states[server.name] = current_state
-                        previous_clients[server.name] = connected_clients
+                        previous_clients[server.name] = connected_clients  # pyre-ignore
             except Exception as e:
                 logger.error(f"Status monitor error: {e}")
             
@@ -301,7 +301,7 @@ def get_generators():
             "modbusDisabled": modbus_disabled,
             # heartbeat supervision (R192 Bit 7)
             "heartbeatFailed": gen.heartbeat_failed,
-            "secondsSinceHeartbeat": round(time.time() - gen.last_heartbeat_time, 1),
+            "secondsSinceHeartbeat": float(f"{time.time() - gen.last_heartbeat_time:.1f}"),
         })
     return gen_list
 
@@ -345,7 +345,7 @@ def get_generator(gen_id: str):
                 "modbusDisabled": modbus_disabled,
                 # heartbeat supervision (R192 Bit 7)
                 "heartbeatFailed": gen.heartbeat_failed,
-                "secondsSinceHeartbeat": round(time.time() - gen.last_heartbeat_time, 1),
+                "secondsSinceHeartbeat": float(f"{time.time() - gen.last_heartbeat_time:.1f}"),
             }
     return None
 
@@ -637,7 +637,7 @@ def get_generator_logs(gen_id: str, limit: int = 100):
             return []
         entries = list(buf)
     # Return newest-first, up to `limit`
-    return list(reversed(entries[-limit:]))  # pyre-ignore
+    return list(reversed(entries))[:limit]  # pyre-ignore
 
 
 @router.get("/loadbanks")
@@ -780,7 +780,7 @@ def get_loadbank_logs(lb_id: str, limit: int = 100):
             return []
         entries = list(buf)
     # Return newest-first, up to `limit`
-    return list(reversed(entries[-limit:]))
+    return list(reversed(entries))[:limit]  # pyre-ignore
 
 app.include_router(router)
 
