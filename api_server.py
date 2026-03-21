@@ -299,6 +299,8 @@ def get_generators():
             "deexcited": gen.SSL['SSL547_GenDeexcited'],
             "serviceMode": svc_mode,
             "modbusDisabled": modbus_disabled,
+            "fcb1": gen.FCB1,
+            "fcb2": gen.FCB2,
             # heartbeat supervision (R192 Bit 7)
             "heartbeatFailed": gen.heartbeat_failed,
             "secondsSinceHeartbeat": round(time.time() - gen.last_heartbeat_time, 1),
@@ -343,6 +345,8 @@ def get_generator(gen_id: str):
                 "deexcited": gen.SSL['SSL547_GenDeexcited'],
                 "serviceMode": svc_mode,
                 "modbusDisabled": modbus_disabled,
+                "fcb1": gen.FCB1,
+                "fcb2": gen.FCB2,
                 # heartbeat supervision (R192 Bit 7)
                 "heartbeatFailed": gen.heartbeat_failed,
                 "secondsSinceHeartbeat": round(time.time() - gen.last_heartbeat_time, 1),
