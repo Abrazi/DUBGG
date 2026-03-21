@@ -26,6 +26,17 @@ export const fetchAllGenerators = async (): Promise<GeneratorStatus[]> => {
   }
 };
 
+export const fetchSwitchgears = async (): Promise<any[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/switchgears`);
+    if (!response.ok) throw new Error('Failed to fetch switchgears');
+    return await response.json();
+  } catch (error) {
+    console.error('API Error:', error);
+    return [];
+  }
+};
+
 export const fetchAdminStatus = async (): Promise<AdminStatus | null> => {
   try {
     const response = await fetch(`${API_BASE_URL}/admin/status`);

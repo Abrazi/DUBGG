@@ -299,6 +299,8 @@ def get_generators():
             "deexcited": gen.SSL['SSL547_GenDeexcited'],
             "serviceMode": svc_mode,
             "modbusDisabled": modbus_disabled,
+            "fcb1": gen.FCB1,
+            "fcb2": gen.FCB2,
             # heartbeat supervision (R192 Bit 7)
             "heartbeatFailed": gen.heartbeat_failed,
             "secondsSinceHeartbeat": float(f"{time.time() - gen.last_heartbeat_time:.1f}"),
@@ -343,6 +345,8 @@ def get_generator(gen_id: str):
                 "deexcited": gen.SSL['SSL547_GenDeexcited'],
                 "serviceMode": svc_mode,
                 "modbusDisabled": modbus_disabled,
+                "fcb1": gen.FCB1,
+                "fcb2": gen.FCB2,
                 # heartbeat supervision (R192 Bit 7)
                 "heartbeatFailed": gen.heartbeat_failed,
                 "secondsSinceHeartbeat": float(f"{time.time() - gen.last_heartbeat_time:.1f}"),
@@ -660,12 +664,12 @@ def get_loadbanks():
             "control_on": status["control_on"],
             "status_bits": status["status_bits"],
             "error_bits": status["error_bits"],
-            "activePower": lb.simulator.read_register(1019) / 10.0,
-            "reactivePower": lb.simulator.read_register(1020) / 10.0,
-            "apparentPower": lb.simulator.read_register(1021) / 10.0,
-            "powerFactor": lb.simulator.read_register(1022) / 100.0,
-            "l1l2Voltage": lb.simulator.read_register(1006) / 10.0,
-            "frequency": lb.simulator.read_register(1015) / 100.0,
+            "activePower": lb.simulator.read_register(1018) / 10.0,
+            "reactivePower": lb.simulator.read_register(1019) / 10.0,
+            "apparentPower": lb.simulator.read_register(1020) / 10.0,
+            "powerFactor": lb.simulator.read_register(1021) / 100.0,
+            "l1l2Voltage": lb.simulator.read_register(1005) / 10.0,
+            "frequency": lb.simulator.read_register(1014) / 100.0,
             "modbusDisabled": modbus_disabled
         })
     return lb_list
@@ -689,12 +693,12 @@ def get_loadbank(lb_id: str):
                 "control_on": status["control_on"],
                 "status_bits": status["status_bits"],
                 "error_bits": status["error_bits"],
-                "activePower": lb.simulator.read_register(1019) / 10.0,
-                "reactivePower": lb.simulator.read_register(1020) / 10.0,
-                "apparentPower": lb.simulator.read_register(1021) / 10.0,
-                "powerFactor": lb.simulator.read_register(1022) / 100.0,
-                "l1l2Voltage": lb.simulator.read_register(1006) / 10.0,
-                "frequency": lb.simulator.read_register(1015) / 100.0,
+                "activePower": lb.simulator.read_register(1018) / 10.0,
+                "reactivePower": lb.simulator.read_register(1019) / 10.0,
+                "apparentPower": lb.simulator.read_register(1020) / 10.0,
+                "powerFactor": lb.simulator.read_register(1021) / 100.0,
+                "l1l2Voltage": lb.simulator.read_register(1005) / 10.0,
+                "frequency": lb.simulator.read_register(1014) / 100.0,
                 "modbusDisabled": modbus_disabled
             }
     return None
@@ -781,6 +785,40 @@ def get_loadbank_logs(lb_id: str, limit: int = 100):
         entries = list(buf)
     # Return newest-first, up to `limit`
     return list(reversed(entries))[:limit]  # pyre-ignore
+
+
+@router.get("/switchgears")
+def get_switchgears():
+    """Get status of all switchgears"""
+    if not sim_instance:
+        return []
+
+    swg_list = []
+    for swg in sim_instance.switchgears:
+        server = next((s for s in sim_instance.servers if s.name == swg.id), None)
+        demand = 0
+        online_count = 0
+
+        if server and server.datastore:
+            try:
+                with server.datastore_lock:
+                    d_vals = server.datastore.getValues(3, 74, count=1)
+                    if isinstance(d_vals, list) and len(d_vals) > 0:
+                        demand = d_vals[0]
+
+                    o_vals = server.datastore.getValues(3, 901, count=1)
+                    if isinstance(o_vals, list) and len(o_vals) > 0:
+                        online_count = o_vals[0]
+            except Exception:
+                pass
+
+        swg_list.append({
+            "id": swg.id,
+            "demand": demand,
+            "onlineCount": online_count,
+            "modbusDisabled": server.modbus_disabled if server else False
+        })
+    return swg_list
 
 app.include_router(router)
 

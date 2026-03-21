@@ -22,6 +22,9 @@ export interface GeneratorStatus {
   serviceMode?: 'off' | 'manual' | 'auto';
   // modbus device failure simulation flag
   modbusDisabled?: boolean;
+  // FCB status
+  fcb1: boolean;
+  fcb2: boolean;
   // heartbeat supervision (R192 Bit 7)
   heartbeatFailed?: boolean;
   secondsSinceHeartbeat?: number;
