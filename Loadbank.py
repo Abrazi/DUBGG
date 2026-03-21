@@ -267,10 +267,11 @@ class LoadBankSimulator:
         i_app = int((apparent_kva * 1000) / (1.732 * v_ll))  # Apparent current base arithmetic
         i_app_scaled = int(i_app * 10) # 10x scaled resolution 
         i_act = int(i_app_scaled * pf_val)  # Active current scaled
+        i_react = int((i_app_scaled ** 2 - i_act ** 2) ** 0.5) # Reactive current scaled
         
         self.registers[1008] = self.registers[1009] = self.registers[1010] = i_act
         self.registers[1015] = self.registers[1016] = self.registers[1017] = i_app_scaled
-        self.registers[1011] = self.registers[1012] = self.registers[1013] = 0  # Reactive currents (simplified)
+        self.registers[1011] = self.registers[1012] = self.registers[1013] = i_react
         
         return True
     

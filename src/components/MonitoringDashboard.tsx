@@ -39,7 +39,7 @@ export function MonitoringDashboard({ generator, historicalData }: MonitoringDas
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Voltage Card */}
         <Card className="bg-slate-800 border-slate-700">
           <CardHeader className="pb-3">
@@ -125,6 +125,28 @@ export function MonitoringDashboard({ generator, historicalData }: MonitoringDas
               />
             </div>
             <p className="text-xs text-slate-500 mt-2">Breaker: {generator.breakerClosed ? 'CLOSED' : 'OPEN'}</p>
+          </CardContent>
+        </Card>
+
+        {/* Reactive Power Card */}
+        <Card className="bg-slate-800 border-slate-700">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-slate-300 text-sm font-medium flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              Reactive Power
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-4xl font-bold text-blue-400">
+              {generator.reactivePower.toFixed(0)} kVAr
+            </div>
+            <div className="mt-2 h-2 bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full transition-all duration-500 bg-blue-400"
+                style={{ width: `${Math.min((Math.abs(generator.reactivePower) / 2500) * 100, 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-slate-500 mt-2">Nominal: 2,100 kVAr</p>
           </CardContent>
         </Card>
       </div>

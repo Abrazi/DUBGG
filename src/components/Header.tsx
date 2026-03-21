@@ -1,10 +1,10 @@
-import { Settings, LayoutDashboard } from 'lucide-react';
+import { Settings, LayoutDashboard, Factory } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import logo from '../assets/Enersol.png';
 
 interface HeaderProps {
-  activeView: 'dashboard' | 'admin';
-  onViewChange: (view: 'dashboard' | 'admin') => void;
+  activeView: 'overview' | 'dashboard' | 'admin';
+  onViewChange: (view: 'overview' | 'dashboard' | 'admin') => void;
 }
 
 export function Header({ activeView, onViewChange }: HeaderProps) {
@@ -22,6 +22,16 @@ export function Header({ activeView, onViewChange }: HeaderProps) {
 
         <div className="flex items-center gap-4 bg-slate-800/50 p-1 rounded-lg border border-slate-700">
           <button
+            onClick={() => onViewChange('overview')}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-md transition-all ${activeView === 'overview'
+              ? 'bg-slate-700 text-white shadow-lg'
+              : 'text-slate-400 hover:text-slate-200'
+              }`}
+          >
+            <Factory className="w-4 h-4" />
+            <span className="text-sm font-medium">Plant Overview</span>
+          </button>
+          <button
             onClick={() => onViewChange('dashboard')}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-md transition-all ${activeView === 'dashboard'
               ? 'bg-slate-700 text-white shadow-lg'
@@ -29,7 +39,7 @@ export function Header({ activeView, onViewChange }: HeaderProps) {
               }`}
           >
             <LayoutDashboard className="w-4 h-4" />
-            <span className="text-sm font-medium">Dashboard</span>
+            <span className="text-sm font-medium">Unit Control</span>
           </button>
           <button
             onClick={() => onViewChange('admin')}
