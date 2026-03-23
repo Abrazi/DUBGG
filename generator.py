@@ -424,7 +424,7 @@ class GeneratorController:
                         if bus_is_live and not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
                             self.SSL['SSL441_SyncGenActivated'] = True
                             self.SSL['SSL547_GenDeexcited'] = False
-                            self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
+                            #self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
                             phase_angle_ok = True
                             if phase_angle_ok:
                                 self.SSL['SSL429_GenCBClosed'] = True
@@ -472,8 +472,10 @@ class GeneratorController:
             self.SSL['SSL427_ServiceSWAuto'] = True
         if self.SSL['SSL430_GenCBOpen']:
             self.SSL['SSL429_GenCBClosed'] = False
+            self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = False
         elif self.SSL['SSL429_GenCBClosed']:
             self.SSL['SSL430_GenCBOpen'] = False
+            self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
         else:
             self.SSL['SSL430_GenCBOpen'] = True
         if self.SSL['SSL431_OperOn']:
