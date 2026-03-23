@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Header } from './components/Header';
 import { MonitoringDashboard } from './components/MonitoringDashboard';
 import { ControlPanel } from './components/ControlPanel';
@@ -31,6 +31,13 @@ function App() {
   const [historicalData, setHistoricalData] = useState<Array<{ time: string; voltage: number; power: number; frequency: number }>>([]);
   const [alarms, setAlarms] = useState<Alarm[]>([]);
 
+  // Refs to hold the latest selected IDs so polling callbacks never go stale
+  const selectedGenIdRef = useRef(selectedGenId);
+  const selectedLbIdRef = useRef(selectedLbId);
+
+  useEffect(() => { selectedGenIdRef.current = selectedGenId; }, [selectedGenId]);
+  useEffect(() => { selectedLbIdRef.current = selectedLbId; }, [selectedLbId]);
+
   // Fetch all generators list
   useEffect(() => {
     const loadGenerators = async () => {
@@ -47,17 +54,18 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch specific generator details
-  const refreshCurrentGenerator = async () => {
-    if (selectedGenId) {
-      const data = await fetchGenerator(selectedGenId);
+  // Fetch specific generator details — use ref so the interval never captures a stale ID
+  const refreshCurrentGenerator = useCallback(async () => {
+    const id = selectedGenIdRef.current;
+    if (id) {
+      const data = await fetchGenerator(id);
       if (data) {
         setCurrentGenerator(data);
         updateHistoricalData(data);
         checkForAlarms(data);
       }
     }
-  };
+  }, []); // stable — reads from ref, not state
 
   useEffect(() => {
     // Clear historical data when changing generators to avoid a "jump" in the chart
@@ -66,7 +74,7 @@ function App() {
     refreshCurrentGenerator();
     const interval = setInterval(refreshCurrentGenerator, 1000); // High refresh rate for selected gen
     return () => clearInterval(interval);
-  }, [selectedGenId]);
+  }, [selectedGenId, refreshCurrentGenerator]);
 
   // Fetch all load banks list
   useEffect(() => {
@@ -94,21 +102,22 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch specific load bank details
-  const refreshCurrentLoadbank = async () => {
-    if (selectedLbId) {
-      const data = await fetchLoadbank(selectedLbId);
+  // Fetch specific load bank details — use ref so the interval never captures a stale ID
+  const refreshCurrentLoadbank = useCallback(async () => {
+    const id = selectedLbIdRef.current;
+    if (id) {
+      const data = await fetchLoadbank(id);
       if (data) {
         setCurrentLoadbank(data);
       }
     }
-  };
+  }, []); // stable — reads from ref, not state
 
   useEffect(() => {
     refreshCurrentLoadbank();
     const interval = setInterval(refreshCurrentLoadbank, 1000); // High refresh rate for selected lb
     return () => clearInterval(interval);
-  }, [selectedLbId]);
+  }, [selectedLbId, refreshCurrentLoadbank]);
 
   const updateHistoricalData = (data: GeneratorStatus) => {
     const now = new Date();
@@ -279,7 +288,7 @@ function App() {
                           value={lb.id}
                           className="bg-slate-800 text-white"
                         >
-                          {lb.id} - {lb.load_applied} kW
+                          {lb.id} - {lb.load_applied.toFixed(1)} kW
                         </option>
                       ))}
                     </select>

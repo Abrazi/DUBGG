@@ -1,0 +1,1109 @@
+diff --git a/api_server.py b/api_server.py
+index 71cdc98..c889de3 100644
+--- a/api_server.py
++++ b/api_server.py
+@@ -1,19 +1,17 @@
+-import asyncio
+ import collections
+ import logging
+ import threading
+ import time
++from contextlib import asynccontextmanager
+ from datetime import datetime
+-from typing import List, Optional, Dict, Tuple, Any
+-from fastapi import FastAPI, APIRouter, Request
+-from fastapi.responses import HTMLResponse
++from typing import Any, Dict, List, Optional
++from fastapi import FastAPI, APIRouter
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel
+ import psutil
+ import platform
+ import socket
+ import os
+-from contextlib import asynccontextmanager
+ 
+ # Import the simulation logic from the file containing your provided code
+ # Ensure your provided code is saved as 'generator_sim.py'
+@@ -184,8 +182,6 @@ app.add_middleware(
+     allow_headers=["*"],
+ )
+ 
+-from typing import Any
+-
+ # Global simulation instance (initialized to None until started)
+ sim_instance: Any = None
+ 
+@@ -373,14 +369,17 @@ def send_command(gen_id: str, req: CommandRequest):
+             target_gen.SSL['SSL701_DemandModule_CMD'] = False
+             logger.info(f"[{gen_id}] Stop Command Sent")
+         elif req.command == "reset_fault":
+-            # Set Reset Fault Bit (Bit 4 of R095)
+-            # Note: In the simulation logic, this clears faultDetected
++            # Clear faultDetected so the tick loop stops trying to transition.
++            # Only fire 'faultCleared' if the state machine is actually in the
++            # fault state to avoid an invalid-transition exception.
+             target_gen.faultDetected = False
+-            target_gen.sm.fire("faultCleared")
++            if target_gen.sm.state == 'fault':
++                target_gen.sm.fire('faultCleared')
+             logger.info(f"[{gen_id}] Fault Reset Sent")
+         elif req.command == "open_breaker":
+-            # open circuit breaker
++            # open circuit breaker — set Open flag, clear Closed flag
+             target_gen.SSL['SSL429_GenCBClosed'] = False
++            target_gen.SSL['SSL430_GenCBOpen'] = True
+             logger.info(f"[{gen_id}] Breaker opened")
+         elif req.command == "close_breaker":
+             # allow closing breaker only when service switch is in MANUAL
+@@ -392,6 +391,12 @@ def send_command(gen_id: str, req: CommandRequest):
+             logger.info(f"[{gen_id}] Breaker closed")
+         elif req.command == "inject_fault":
+             target_gen.faultDetected = True
++            # Immediately drive the state machine into fault state if the
++            # 'faultOccurred' transition is valid from the current state.
++            try:
++                target_gen.sm.fire('faultOccurred')
++            except Exception:
++                pass  # transition not valid from current state — tick loop will handle it
+             logger.info(f"[{gen_id}] Fault injected")
+         elif req.command == "deexcite_on":
+             target_gen.SSL['SSL547_GenDeexcited'] = True
+@@ -721,6 +726,11 @@ def send_loadbank_command(lb_id: str, req: CommandRequest):
+             target_lb.simulator.disable_modbus_control()
+             logger.info(f"[{lb_id}] Modbus control disabled")
+         elif req.command == "apply_load":
++            # Clear the 0x08 bit first so apply_load() doesn't think a prior
++            # apply is still pending (the tick loop clears it, but the API
++            # may be called before the next tick runs).
++            ctrl = target_lb.simulator.read_register(1700)
++            target_lb.simulator.write_register(1700, ctrl & ~0x08)
+             success = target_lb.simulator.apply_load()
+             if success:
+                 logger.info(f"[{lb_id}] Load applied")
+diff --git a/src/App.tsx b/src/App.tsx
+index b6ee095..a8a40ca 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,4 +1,4 @@
+-import { useState, useEffect, useRef } from 'react';
++import { useState, useEffect, useRef, useCallback } from 'react';
+ import { Header } from './components/Header';
+ import { MonitoringDashboard } from './components/MonitoringDashboard';
+ import { ControlPanel } from './components/ControlPanel';
+@@ -31,6 +31,13 @@ function App() {
+   const [historicalData, setHistoricalData] = useState<Array<{ time: string; voltage: number; power: number; frequency: number }>>([]);
+   const [alarms, setAlarms] = useState<Alarm[]>([]);
+ 
++  // Refs to hold the latest selected IDs so polling callbacks never go stale
++  const selectedGenIdRef = useRef(selectedGenId);
++  const selectedLbIdRef = useRef(selectedLbId);
++
++  useEffect(() => { selectedGenIdRef.current = selectedGenId; }, [selectedGenId]);
++  useEffect(() => { selectedLbIdRef.current = selectedLbId; }, [selectedLbId]);
++
+   // Fetch all generators list
+   useEffect(() => {
+     const loadGenerators = async () => {
+@@ -47,17 +54,18 @@ function App() {
+     return () => clearInterval(interval);
+   }, []);
+ 
+-  // Fetch specific generator details
+-  const refreshCurrentGenerator = async () => {
+-    if (selectedGenId) {
+-      const data = await fetchGenerator(selectedGenId);
++  // Fetch specific generator details — use ref so the interval never captures a stale ID
++  const refreshCurrentGenerator = useCallback(async () => {
++    const id = selectedGenIdRef.current;
++    if (id) {
++      const data = await fetchGenerator(id);
+       if (data) {
+         setCurrentGenerator(data);
+         updateHistoricalData(data);
+         checkForAlarms(data);
+       }
+     }
+-  };
++  }, []); // stable — reads from ref, not state
+ 
+   useEffect(() => {
+     // Clear historical data when changing generators to avoid a "jump" in the chart
+@@ -66,7 +74,7 @@ function App() {
+     refreshCurrentGenerator();
+     const interval = setInterval(refreshCurrentGenerator, 1000); // High refresh rate for selected gen
+     return () => clearInterval(interval);
+-  }, [selectedGenId]);
++  }, [selectedGenId, refreshCurrentGenerator]);
+ 
+   // Fetch all load banks list
+   useEffect(() => {
+@@ -94,21 +102,22 @@ function App() {
+     return () => clearInterval(interval);
+   }, []);
+ 
+-  // Fetch specific load bank details
+-  const refreshCurrentLoadbank = async () => {
+-    if (selectedLbId) {
+-      const data = await fetchLoadbank(selectedLbId);
++  // Fetch specific load bank details — use ref so the interval never captures a stale ID
++  const refreshCurrentLoadbank = useCallback(async () => {
++    const id = selectedLbIdRef.current;
++    if (id) {
++      const data = await fetchLoadbank(id);
+       if (data) {
+         setCurrentLoadbank(data);
+       }
+     }
+-  };
++  }, []); // stable — reads from ref, not state
+ 
+   useEffect(() => {
+     refreshCurrentLoadbank();
+     const interval = setInterval(refreshCurrentLoadbank, 1000); // High refresh rate for selected lb
+     return () => clearInterval(interval);
+-  }, [selectedLbId]);
++  }, [selectedLbId, refreshCurrentLoadbank]);
+ 
+   const updateHistoricalData = (data: GeneratorStatus) => {
+     const now = new Date();
+@@ -279,7 +288,7 @@ function App() {
+                           value={lb.id}
+                           className="bg-slate-800 text-white"
+                         >
+-                          {lb.id} - {lb.load_applied} kW
++                          {lb.id} - {lb.load_applied.toFixed(1)} kW
+                         </option>
+                       ))}
+                     </select>
+@@ -327,4 +336,4 @@ function App() {
+   );
+ }
+ 
+-export default App;
+\ No newline at end of file
++export default App;
+diff --git a/src/components/AdministrationPage.tsx b/src/components/AdministrationPage.tsx
+index 158ce06..aaa89db 100644
+--- a/src/components/AdministrationPage.tsx
++++ b/src/components/AdministrationPage.tsx
+@@ -27,6 +27,15 @@ export function AdministrationPage() {
+         );
+     }
+ 
++    const activeCount = status?.servers.filter(s => !s.modbusDisabled).length ?? 0;
++    const totalCount = status?.servers.length ?? 0;
++
++    const typeBadgeClass = (type: string) => {
++        if (type === 'generator') return 'bg-blue-500/10 text-blue-400 border border-blue-500/20';
++        if (type === 'loadbank')  return 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
++        return 'bg-purple-500/10 text-purple-400 border border-purple-500/20'; // switchgear
++    };
++
+     return (
+         <div className="space-y-6">
+             <div className="flex items-center justify-between">
+@@ -83,8 +92,8 @@ export function AdministrationPage() {
+             <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                 <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+                     <h3 className="font-semibold text-white">Backend Modbus Servers Status</h3>
+-                    <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-xs rounded border border-emerald-500/20">
+-                        {status?.servers.length} Active Servers
++                    <span className={`px-2 py-1 text-xs rounded border ${activeCount < totalCount ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
++                        {activeCount} / {totalCount} Online
+                     </span>
+                 </div>
+                 <div className="overflow-x-auto">
+@@ -105,8 +114,7 @@ export function AdministrationPage() {
+                                 <tr key={server.name} className={`hover:bg-slate-800/50 transition-colors ${server.modbusDisabled ? 'bg-red-950/20' : ''}`}>
+                                     <td className="px-6 py-4 text-white font-semibold">{server.name}</td>
+                                     <td className="px-6 py-4">
+-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${server.type === 'generator' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+-                                            }`}>
++                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${typeBadgeClass(server.type)}`}>
+                                             {server.type}
+                                         </span>
+                                     </td>
+@@ -122,11 +130,11 @@ export function AdministrationPage() {
+                                         </div>
+                                     </td>
+                                     <td className="px-6 py-4">
+-                                        <div className="flex justify-center">
++                                        <div className="flex justify-center" title={server.modbusDisabled ? 'Device failure simulation active' : ''}>
+                                             {!server.modbusDisabled && server.is_port_open ? (
+                                                 <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                                             ) : server.modbusDisabled ? (
+-                                                <div title="Device failure simulation active"><XCircle className="w-5 h-5 text-orange-500" /></div>
++                                                <XCircle className="w-5 h-5 text-orange-500" />
+                                             ) : (
+                                                 <XCircle className="w-5 h-5 text-red-500" />
+                                             )}
+@@ -137,7 +145,7 @@ export function AdministrationPage() {
+                                             ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                                             : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                             }`}>
+-                                            {server.modbusDisabled ? '⬛ OFFLINE' : '🟢 ONLINE'}
++                                            {server.modbusDisabled ? 'OFFLINE' : 'ONLINE'}
+                                         </span>
+                                     </td>
+                                 </tr>
+@@ -149,9 +157,9 @@ export function AdministrationPage() {
+ 
+             <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl text-slate-400 text-sm">
+                 <p><strong>Note:</strong> <br/>
+-                • <strong>Port Accessible</strong> shows if the Modbus server is reachable. Orange icon (⊘) indicates device failure simulation is active.<br/>
+-                • <strong>Modbus Status</strong> shows whether the device is ONLINE (accepting connections) or OFFLINE (failure simulation active).<br/>
+-                • If "Server Process" is green but "Port Accessible" is red (and not from failure simulation), there might be an IP binding issue or a firewall blocking the connection.</p>
++                <strong>Port Accessible</strong> shows if the Modbus server is reachable. Orange icon indicates device failure simulation is active.<br/>
++                <strong>Modbus Status</strong> shows whether the device is ONLINE (accepting connections) or OFFLINE (failure simulation active).<br/>
++                If "Server Process" is green but "Port Accessible" is red (and not from failure simulation), there might be an IP binding issue or a firewall blocking the connection.</p>
+             </div>
+         </div>
+     );
+diff --git a/src/components/AlarmPanel.tsx b/src/components/AlarmPanel.tsx
+index ac94201..3d36ffb 100644
+--- a/src/components/AlarmPanel.tsx
++++ b/src/components/AlarmPanel.tsx
+@@ -1,4 +1,4 @@
+-import { Alarm } from '../types/hmi';
++import { Alarm } from '../types/generator';
+ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+ import { Button } from '../components/ui/button';
+ import { Bell, AlertTriangle, Info, Check, X } from 'lucide-react';
+diff --git a/src/components/ControlPanel.tsx b/src/components/ControlPanel.tsx
+index 4614742..b19a817 100644
+--- a/src/components/ControlPanel.tsx
++++ b/src/components/ControlPanel.tsx
+@@ -1,4 +1,4 @@
+-import { useState, useEffect, useRef } from 'react';
++import { useState, useEffect, useRef, useCallback } from 'react';
+ import { GeneratorStatus } from '../types/generator';
+ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+ import { Button } from '../components/ui/button';
+@@ -19,6 +19,7 @@ interface SimConfig {
+   stopDelay: number;
+   serviceMode: 'off' | 'manual' | 'auto';
+ }
++
+ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+   const [config, setConfig] = useState<SimConfig>({
+     simulateFailToStart: generator.simulateFailToStart || false,
+@@ -30,16 +31,21 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+     serviceMode: generator.serviceMode || 'auto',
+   });
+ 
++  // Sync config when the selected generator changes (different id)
++  const prevGenId = useRef(generator.id);
+   useEffect(() => {
+-    setConfig({
+-      simulateFailToStart: generator.simulateFailToStart || false,
+-      failRampUp: generator.failRampUp || false,
+-      failRampDown: generator.failRampDown || false,
+-      failStartTime: generator.failStartTime || false,
+-      startDelay: generator.startDelay || 0,
+-      stopDelay: generator.stopDelay || 0,
+-      serviceMode: generator.serviceMode || 'auto',
+-    });
++    if (generator.id !== prevGenId.current) {
++      prevGenId.current = generator.id;
++      setConfig({
++        simulateFailToStart: generator.simulateFailToStart || false,
++        failRampUp: generator.failRampUp || false,
++        failRampDown: generator.failRampDown || false,
++        failStartTime: generator.failStartTime || false,
++        startDelay: generator.startDelay || 0,
++        stopDelay: generator.stopDelay || 0,
++        serviceMode: generator.serviceMode || 'auto',
++      });
++    }
+   }, [generator]);
+ 
+   const handleCommand = async (
+@@ -60,37 +66,42 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+     }
+   };
+ 
+-  const applyConfig = async () => {
+-    const success = await updateGeneratorConfig(generator.id, {
+-      simulate_fail_to_start: config.simulateFailToStart,
+-      fail_ramp_up: config.failRampUp,
+-      fail_ramp_down: config.failRampDown,
+-      fail_start_time: config.failStartTime,
+-      start_delay: config.startDelay,
+-      stop_delay: config.stopDelay,
+-      service_mode: config.serviceMode,
++  const applyConfig = useCallback(async (cfg: SimConfig) => {
++    await updateGeneratorConfig(generator.id, {
++      simulate_fail_to_start: cfg.simulateFailToStart,
++      fail_ramp_up: cfg.failRampUp,
++      fail_ramp_down: cfg.failRampDown,
++      fail_start_time: cfg.failStartTime,
++      start_delay: cfg.startDelay,
++      stop_delay: cfg.stopDelay,
++      service_mode: cfg.serviceMode,
+     });
+-    if (success) {
+-      setTimeout(onUpdate, 500);
+-    }
+-  };
++    setTimeout(onUpdate, 500);
++  }, [generator.id, onUpdate]);
++
++  // Debounce auto-push: boolean toggles fire immediately; number inputs wait 600 ms
++  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const isFirstRender = useRef(true);
+ 
+-  // whenever config object changes, push update to backend automatically
+-  const firstUpdate = useRef(true);
+   useEffect(() => {
+-    if (firstUpdate.current) {
+-      firstUpdate.current = false;
++    if (isFirstRender.current) {
++      isFirstRender.current = false;
+       return;
+     }
+-    applyConfig();
+-  }, [config]);
++    if (debounceTimer.current) clearTimeout(debounceTimer.current);
++    debounceTimer.current = setTimeout(() => {
++      applyConfig(config);
++    }, 400);
++    return () => {
++      if (debounceTimer.current) clearTimeout(debounceTimer.current);
++    };
++  }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
+ 
+   const handleModbusToggle = async (enable: boolean) => {
+     const result = await setModbusEnabled(generator.id, enable);
+     if (result.success) {
+       setTimeout(onUpdate, 600);
+     } else {
+-      // show error to user (simple alert for now)
+       alert(`Failed to ${enable ? 'enable' : 'disable'} device: ${result.message}`);
+     }
+   };
+@@ -204,20 +215,28 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+               </label>
+             </div>
+             <div className="mt-2 grid grid-cols-2 gap-2">
+-              <input
+-                type="number"
+-                value={config.startDelay}
+-                onChange={e => setConfig({ ...config, startDelay: Number(e.target.value) })}
+-                className="w-full bg-slate-700 text-white p-1 rounded"
+-                placeholder="Start Delay"
+-              />
+-              <input
+-                type="number"
+-                value={config.stopDelay}
+-                onChange={e => setConfig({ ...config, stopDelay: Number(e.target.value) })}
+-                className="w-full bg-slate-700 text-white p-1 rounded"
+-                placeholder="Stop Delay"
+-              />
++              <div>
++                <label className="text-xs text-slate-400 block mb-1">Start Delay (s)</label>
++                <input
++                  type="number"
++                  value={config.startDelay}
++                  onChange={e => setConfig({ ...config, startDelay: Number(e.target.value) })}
++                  className="w-full bg-slate-700 text-white p-1 rounded"
++                  placeholder="Start Delay"
++                  min="0"
++                />
++              </div>
++              <div>
++                <label className="text-xs text-slate-400 block mb-1">Stop Delay (s)</label>
++                <input
++                  type="number"
++                  value={config.stopDelay}
++                  onChange={e => setConfig({ ...config, stopDelay: Number(e.target.value) })}
++                  className="w-full bg-slate-700 text-white p-1 rounded"
++                  placeholder="Stop Delay"
++                  min="0"
++                />
++              </div>
+             </div>
+             <div className="mt-4">
+               <label className="block text-sm text-slate-300 mb-1">Service Switch Mode</label>
+@@ -231,7 +250,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+                 <option value="off">Off</option>
+               </select>
+             </div>
+-            {/* button removed - config updates are applied automatically */}
++            <p className="text-slate-500 text-xs mt-2">Changes are applied automatically after a short delay.</p>
+           </div>
+         </div>
+ 
+@@ -261,7 +280,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+                 ? 'bg-red-600/30 text-red-300 border border-red-500/50'
+                 : 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
+               }`}>
+-              {generator.modbusDisabled ? '⬛ OFFLINE — Device Failure' : '🟢 ONLINE'}
++              {generator.modbusDisabled ? 'OFFLINE — Device Failure' : 'ONLINE'}
+             </span>
+           </div>
+           <p className="text-slate-500 text-xs mb-3">
+@@ -291,4 +310,4 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
+       </CardContent>
+     </Card>
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/src/components/LoadBankControlPanel.tsx b/src/components/LoadBankControlPanel.tsx
+index 091fbfc..9d08b00 100644
+--- a/src/components/LoadBankControlPanel.tsx
++++ b/src/components/LoadBankControlPanel.tsx
+@@ -2,6 +2,7 @@ import React, { useState } from 'react';
+ import { LoadBankStatus } from '../types/loadbank';
+ import { selectLoadbankLoad, sendLoadbankCommand, setLoadbankModbusEnabled } from '../utils/api';
+ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
++import { WifiOff, Wifi } from 'lucide-react';
+ 
+ interface LoadBankControlPanelProps {
+   loadbank: LoadBankStatus;
+@@ -32,8 +33,11 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
+     onUpdate();
+   };
+ 
++  // Toggle: if currently disabled → enable; if currently enabled → disable
+   const handleModbusToggle = async () => {
+-    await setLoadbankModbusEnabled(loadbank.id, !!loadbank.modbusDisabled);
++    // enabled=true means "bring the server back online"
++    const enable = loadbank.modbusDisabled;
++    await setLoadbankModbusEnabled(loadbank.id, enable);
+     onUpdate();
+   };
+ 
+@@ -48,10 +52,13 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
+             <span className={`px-2 py-1 text-xs rounded font-bold ${loadbank.control_on ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' : 'bg-slate-500/20 text-slate-400 border border-slate-500/50'}`}>
+               MODBUS CONTROL: {loadbank.control_on ? 'ON' : 'OFF'}
+             </span>
++            <span className={`px-2 py-1 text-xs rounded font-bold ${!loadbank.modbusDisabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' : 'bg-red-500/20 text-red-400 border border-red-500/50 animate-pulse'}`}>
++              {!loadbank.modbusDisabled ? 'ONLINE' : 'OFFLINE'}
++            </span>
+           </div>
+         </div>
+       </CardHeader>
+-      
++
+       <CardContent className="pt-6 space-y-8">
+         {/* Modbus Control Toggle */}
+         <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+@@ -80,32 +87,45 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
+               Disable Control
+             </button>
+           </div>
+-          <div className="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between">
+-            <span className="text-slate-300">Simulate Device Failure (TCP Server Online)</span>
+-             <button
++
++          {/* Device Failure Simulation — label reflects current state */}
++          <div className={`mt-4 pt-4 border-t border-slate-700/50 p-3 rounded-lg ${loadbank.modbusDisabled ? 'bg-red-950/30 border border-red-600/40' : 'bg-slate-900/50 border border-slate-700/30'}`}>
++            <div className="flex items-center justify-between">
++              <div className="flex items-center gap-2">
++                {loadbank.modbusDisabled
++                  ? <WifiOff className="w-4 h-4 text-red-400" />
++                  : <Wifi className="w-4 h-4 text-emerald-400" />}
++                <span className="text-slate-300 text-sm font-medium">
++                  {loadbank.modbusDisabled
++                    ? 'Device Failure Active — TCP Server Offline'
++                    : 'TCP Server Online'}
++                </span>
++              </div>
++              <button
+                 onClick={handleModbusToggle}
+-                className={`px-4 py-2 rounded text-sm font-medium ${
++                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                   !loadbank.modbusDisabled
+                     ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/50'
+                     : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/50'
+                 }`}
+               >
+-                {!loadbank.modbusDisabled ? 'Disable Server' : 'Enable Server'}
++                {!loadbank.modbusDisabled ? 'Simulate Failure' : 'Restore Device'}
+               </button>
++            </div>
+           </div>
+         </div>
+ 
+         {/* Load Selection & Action */}
+         <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+           <h4 className="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">Load Management</h4>
+-          
++
+           <div className="grid grid-cols-3 gap-4 mb-6">
+             <div>
+               <label className="text-xs text-slate-400 block mb-1">Resistive (kW)</label>
+-              <input 
+-                type="number" 
+-                value={resistiveKw} 
+-                onChange={e => setResistiveKw(e.target.value)} 
++              <input
++                type="number"
++                value={resistiveKw}
++                onChange={e => setResistiveKw(e.target.value)}
+                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                 min="0"
+                 step="5"
+@@ -113,10 +133,10 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
+             </div>
+             <div>
+               <label className="text-xs text-slate-400 block mb-1">Inductive (kVArL)</label>
+-              <input 
+-                type="number" 
+-                value={inductiveKvar} 
+-                onChange={e => setInductiveKvar(e.target.value)} 
++              <input
++                type="number"
++                value={inductiveKvar}
++                onChange={e => setInductiveKvar(e.target.value)}
+                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                 min="0"
+                 step="5"
+@@ -124,10 +144,10 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
+             </div>
+             <div>
+               <label className="text-xs text-slate-400 block mb-1">Capacitive (kVArC)</label>
+-              <input 
+-                type="number" 
+-                value={capacitiveKvar} 
+-                onChange={e => setCapacitiveKvar(e.target.value)} 
++              <input
++                type="number"
++                value={capacitiveKvar}
++                onChange={e => setCapacitiveKvar(e.target.value)}
+                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
+                 min="0"
+                 step="5"
+@@ -158,9 +178,9 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
+             </button>
+           </div>
+         </div>
+-        
++
+         {/* Readings */}
+-         <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
++        <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+           <h4 className="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">Current Readings</h4>
+           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-slate-900 p-3 rounded">
+diff --git a/src/types/admin.ts b/src/types/admin.ts
+index 1f711fa..3594421 100644
+--- a/src/types/admin.ts
++++ b/src/types/admin.ts
+@@ -5,7 +5,7 @@ export interface ServerStatus {
+     is_running: boolean;
+     is_port_open: boolean;
+     modbusDisabled: boolean;
+-    type: 'generator' | 'switchgear';
++    type: 'generator' | 'switchgear' | 'loadbank';
+ }
+ 
+ export interface SystemInfo {
+diff --git a/src/utils/api.ts b/src/utils/api.ts
+index aebb8ef..c36c5d6 100644
+--- a/src/utils/api.ts
++++ b/src/utils/api.ts
+@@ -1,30 +1,31 @@
+-/// <reference types="vite/client" />
+-import { GeneratorStatus } from '../types/generator';
+-import { AdminStatus } from '../types/admin';
+-
+-export interface GeneratorLogEntry {
+-  timestamp: string;
+-  level: string;
+-  message: string;
+-}
+-
+-// In development (Vite dev server on :3000) the API lives on :8000.
+-// In production the EXE serves both frontend and API on the same port,
+-// so a relative URL (empty string) works for any host/IP.
+-const API_BASE_URL =
+-  import.meta.env.DEV ? 'http://localhost:8000' : '';
+-
+-
+-export const fetchAllGenerators = async (): Promise<GeneratorStatus[]> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/generators`);
+-    if (!response.ok) throw new Error('Failed to fetch generators');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('API Error:', error);
+-    return [];
+-  }
+-};
++/// <reference types="vite/client" />
++import { GeneratorStatus } from '../types/generator';
++import { LoadBankStatus } from '../types/loadbank';
++import { AdminStatus } from '../types/admin';
++
++export interface GeneratorLogEntry {
++  timestamp: string;
++  level: string;
++  message: string;
++}
++
++// In development (Vite dev server on :3000) the API lives on :8500.
++// In production the EXE serves both frontend and API on the same port,
++// so a relative URL (empty string) works for any host/IP.
++const API_BASE_URL =
++  import.meta.env.DEV ? 'http://localhost:8500' : '';
++
++
++export const fetchAllGenerators = async (): Promise<GeneratorStatus[]> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/generators`);
++    if (!response.ok) throw new Error('Failed to fetch generators');
++    return await response.json();
++  } catch (error) {
++    console.error('API Error:', error);
++    return [];
++  }
++};
+ 
+ export const fetchSwitchgears = async (): Promise<any[]> => {
+   try {
+@@ -36,214 +37,213 @@ export const fetchSwitchgears = async (): Promise<any[]> => {
+     return [];
+   }
+ };
+-
+-export const fetchAdminStatus = async (): Promise<AdminStatus | null> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/admin/status`);
+-    if (!response.ok) throw new Error('Failed to fetch admin status');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('Admin Status Error:', error);
+-    return null;
+-  }
+-};
+-
+-export const fetchGenerator = async (id: string): Promise<GeneratorStatus | null> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/generators/${id}`);
+-    if (!response.ok) throw new Error('Failed to fetch generator');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('API Error:', error);
+-    return null;
+-  }
+-};
+-
+-export type GenCommand =
+-  | 'start'
+-  | 'stop'
+-  | 'reset_fault'
+-  | 'open_breaker'
+-  | 'close_breaker'
+-  | 'inject_fault'
+-  | 'deexcite_on'
+-  | 'deexcite_off';
+-
+-
+-interface ConfigPayload {
+-  simulate_fail_to_start?: boolean;
+-  fail_ramp_up?: boolean;
+-  fail_ramp_down?: boolean;
+-  fail_start_time?: boolean;
+-  start_delay?: number;
+-  stop_delay?: number;
+-  // optional service switch mode value
+-  service_mode?: 'off' | 'manual' | 'auto';
+-}
+-
+-export const sendCommand = async (id: string, command: GenCommand): Promise<boolean> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/generators/${id}/command`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ command }),
+-    });
+-    return response.ok;
+-  } catch (error) {
+-    console.error('Command Error:', error);
+-    return false;
+-  }
+-};
+-
+-export const updateGeneratorConfig = async (id: string, config: ConfigPayload): Promise<boolean> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/generators/${id}/config`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify(config),
+-    });
+-    return response.ok;
+-  } catch (error) {
+-    console.error('Config Error:', error);
+-    return false;
+-  }
+-};
+-
+-export const fetchGeneratorLogs = async (
+-  id: string,
+-  limit = 100
+-): Promise<GeneratorLogEntry[]> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/generators/${id}/logs?limit=${limit}`);
+-    if (!response.ok) throw new Error('Failed to fetch logs');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('Logs Error:', error);
+-    return [];
+-  }
+-};
+-
+-export interface ApiResult {
+-  status: string;
+-  message: string;
+-}
+-
+-export const setModbusEnabled = async (
+-  id: string,
+-  enabled: boolean
+-): Promise<{ success: boolean; message: string }> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/generators/${id}/modbus`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ enabled }),
+-    });
+-    let result: ApiResult = { status: 'error', message: 'Unknown' };
+-    try {
+-      result = await response.json();
+-    } catch {
+-      // non-json response
+-    }
+-    const success = response.ok && result.status === 'success';
+-    return { success, message: result.message || '' };
+-  } catch (error) {
+-    console.error('Modbus Enable/Disable Error:', error);
+-    return { success: false, message: String(error) };
+-  }
+-};
+-
+-export const fetchLoadbankLogs = async (
+-  id: string,
+-  limit = 100
+-): Promise<GeneratorLogEntry[]> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/logs?limit=${limit}`);
+-    if (!response.ok) throw new Error('Failed to fetch load bank logs');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('LB Logs Error:', error);
+-    return [];
+-  }
+-};
+-
+-// Load Bank APIs
+-import { LoadBankStatus } from '../types/loadbank';
+-
+-export const fetchAllLoadbanks = async (): Promise<LoadBankStatus[]> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/loadbanks`);
+-    if (!response.ok) throw new Error('Failed to fetch load banks');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('API Error:', error);
+-    return [];
+-  }
+-};
+-
+-export const fetchLoadbank = async (id: string): Promise<LoadBankStatus | null> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}`);
+-    if (!response.ok) throw new Error('Failed to fetch load bank');
+-    return await response.json();
+-  } catch (error) {
+-    console.error('API Error:', error);
+-    return null;
+-  }
+-};
+-
+-export type LBCommand = 'enable_modbus_control' | 'disable_modbus_control' | 'apply_load' | 'reject_load';
+-
+-export const sendLoadbankCommand = async (id: string, command: LBCommand): Promise<boolean> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/command`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ command }),
+-    });
+-    return response.ok;
+-  } catch (error) {
+-    console.error('Command Error:', error);
+-    return false;
+-  }
+-};
+-
+-export const selectLoadbankLoad = async (
+-  id: string, 
+-  load: { resistive_kW: number; inductive_kVAr?: number; capacitive_kVAr?: number }
+-): Promise<boolean> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/select_load`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify(load),
+-    });
+-    return response.ok;
+-  } catch (error) {
+-    console.error('Select Load Error:', error);
+-    return false;
+-  }
+-};
+-
+-export const setLoadbankModbusEnabled = async (
+-  id: string,
+-  enabled: boolean
+-): Promise<{ success: boolean; message: string }> => {
+-  try {
+-    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/modbus`, {
+-      method: 'POST',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify({ enabled }),
+-    });
+-    let result: ApiResult = { status: 'error', message: 'Unknown' };
+-    try {
+-      result = await response.json();
+-    } catch {
+-      // non-json response
+-    }
+-    const success = response.ok && result.status === 'success';
+-    return { success, message: result.message || '' };
+-  } catch (error) {
+-    console.error('LB Modbus Enable/Disable Error:', error);
+-    return { success: false, message: String(error) };
+-  }
+-};
+\ No newline at end of file
++
++export const fetchAdminStatus = async (): Promise<AdminStatus | null> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/admin/status`);
++    if (!response.ok) throw new Error('Failed to fetch admin status');
++    return await response.json();
++  } catch (error) {
++    console.error('Admin Status Error:', error);
++    return null;
++  }
++};
++
++export const fetchGenerator = async (id: string): Promise<GeneratorStatus | null> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/generators/${id}`);
++    if (!response.ok) throw new Error('Failed to fetch generator');
++    return await response.json();
++  } catch (error) {
++    console.error('API Error:', error);
++    return null;
++  }
++};
++
++export type GenCommand =
++  | 'start'
++  | 'stop'
++  | 'reset_fault'
++  | 'open_breaker'
++  | 'close_breaker'
++  | 'inject_fault'
++  | 'deexcite_on'
++  | 'deexcite_off';
++
++
++interface ConfigPayload {
++  simulate_fail_to_start?: boolean;
++  fail_ramp_up?: boolean;
++  fail_ramp_down?: boolean;
++  fail_start_time?: boolean;
++  start_delay?: number;
++  stop_delay?: number;
++  // optional service switch mode value
++  service_mode?: 'off' | 'manual' | 'auto';
++}
++
++export const sendCommand = async (id: string, command: GenCommand): Promise<boolean> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/generators/${id}/command`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ command }),
++    });
++    return response.ok;
++  } catch (error) {
++    console.error('Command Error:', error);
++    return false;
++  }
++};
++
++export const updateGeneratorConfig = async (id: string, config: ConfigPayload): Promise<boolean> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/generators/${id}/config`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify(config),
++    });
++    return response.ok;
++  } catch (error) {
++    console.error('Config Error:', error);
++    return false;
++  }
++};
++
++export const fetchGeneratorLogs = async (
++  id: string,
++  limit = 100
++): Promise<GeneratorLogEntry[]> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/generators/${id}/logs?limit=${limit}`);
++    if (!response.ok) throw new Error('Failed to fetch logs');
++    return await response.json();
++  } catch (error) {
++    console.error('Logs Error:', error);
++    return [];
++  }
++};
++
++export interface ApiResult {
++  status: string;
++  message: string;
++}
++
++export const setModbusEnabled = async (
++  id: string,
++  enabled: boolean
++): Promise<{ success: boolean; message: string }> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/generators/${id}/modbus`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ enabled }),
++    });
++    let result: ApiResult = { status: 'error', message: 'Unknown' };
++    try {
++      result = await response.json();
++    } catch {
++      // non-json response
++    }
++    const success = response.ok && result.status === 'success';
++    return { success, message: result.message || '' };
++  } catch (error) {
++    console.error('Modbus Enable/Disable Error:', error);
++    return { success: false, message: String(error) };
++  }
++};
++
++export const fetchLoadbankLogs = async (
++  id: string,
++  limit = 100
++): Promise<GeneratorLogEntry[]> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/logs?limit=${limit}`);
++    if (!response.ok) throw new Error('Failed to fetch load bank logs');
++    return await response.json();
++  } catch (error) {
++    console.error('LB Logs Error:', error);
++    return [];
++  }
++};
++
++// Load Bank APIs
++
++export const fetchAllLoadbanks = async (): Promise<LoadBankStatus[]> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/loadbanks`);
++    if (!response.ok) throw new Error('Failed to fetch load banks');
++    return await response.json();
++  } catch (error) {
++    console.error('API Error:', error);
++    return [];
++  }
++};
++
++export const fetchLoadbank = async (id: string): Promise<LoadBankStatus | null> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}`);
++    if (!response.ok) throw new Error('Failed to fetch load bank');
++    return await response.json();
++  } catch (error) {
++    console.error('API Error:', error);
++    return null;
++  }
++};
++
++export type LBCommand = 'enable_modbus_control' | 'disable_modbus_control' | 'apply_load' | 'reject_load';
++
++export const sendLoadbankCommand = async (id: string, command: LBCommand): Promise<boolean> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/command`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ command }),
++    });
++    return response.ok;
++  } catch (error) {
++    console.error('Command Error:', error);
++    return false;
++  }
++};
++
++export const selectLoadbankLoad = async (
++  id: string,
++  load: { resistive_kW: number; inductive_kVAr?: number; capacitive_kVAr?: number }
++): Promise<boolean> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/select_load`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify(load),
++    });
++    return response.ok;
++  } catch (error) {
++    console.error('Select Load Error:', error);
++    return false;
++  }
++};
++
++export const setLoadbankModbusEnabled = async (
++  id: string,
++  enabled: boolean
++): Promise<{ success: boolean; message: string }> => {
++  try {
++    const response = await fetch(`${API_BASE_URL}/loadbanks/${id}/modbus`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ enabled }),
++    });
++    let result: ApiResult = { status: 'error', message: 'Unknown' };
++    try {
++      result = await response.json();
++    } catch {
++      // non-json response
++    }
++    const success = response.ok && result.status === 'success';
++    return { success, message: result.message || '' };
++  } catch (error) {
++    console.error('LB Modbus Enable/Disable Error:', error);
++    return { success: false, message: String(error) };
++  }
++};
+diff --git a/vite.config.ts b/vite.config.ts
+index 8ef8cab..2ccabc2 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -10,5 +10,12 @@ export default defineConfig({
+   },
+   server: {
+     port: 3000,
++    proxy: {
++      // Forward all API calls to the backend running on :8500
++      '/generators': 'http://localhost:8500',
++      '/loadbanks':  'http://localhost:8500',
++      '/switchgears': 'http://localhost:8500',
++      '/admin':      'http://localhost:8500',
++    },
+   },
+ });

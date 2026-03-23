@@ -1,19 +1,17 @@
-import asyncio
 import collections
 import logging
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import List, Optional, Dict, Tuple, Any
-from fastapi import FastAPI, APIRouter, Request
-from fastapi.responses import HTMLResponse
+from typing import Any, Dict, List, Optional
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psutil
 import platform
 import socket
 import os
-from contextlib import asynccontextmanager
 
 # Import the simulation logic from the file containing your provided code
 # Ensure your provided code is saved as 'generator_sim.py'
@@ -183,8 +181,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from typing import Any
 
 # Global simulation instance (initialized to None until started)
 sim_instance: Any = None
@@ -373,14 +369,17 @@ def send_command(gen_id: str, req: CommandRequest):
             target_gen.SSL['SSL701_DemandModule_CMD'] = False
             logger.info(f"[{gen_id}] Stop Command Sent")
         elif req.command == "reset_fault":
-            # Set Reset Fault Bit (Bit 4 of R095)
-            # Note: In the simulation logic, this clears faultDetected
+            # Clear faultDetected so the tick loop stops trying to transition.
+            # Only fire 'faultCleared' if the state machine is actually in the
+            # fault state to avoid an invalid-transition exception.
             target_gen.faultDetected = False
-            target_gen.sm.fire("faultCleared")
+            if target_gen.sm.state == 'fault':
+                target_gen.sm.fire('faultCleared')
             logger.info(f"[{gen_id}] Fault Reset Sent")
         elif req.command == "open_breaker":
-            # open circuit breaker
+            # open circuit breaker — set Open flag, clear Closed flag
             target_gen.SSL['SSL429_GenCBClosed'] = False
+            target_gen.SSL['SSL430_GenCBOpen'] = True
             logger.info(f"[{gen_id}] Breaker opened")
         elif req.command == "close_breaker":
             # allow closing breaker only when service switch is in MANUAL
@@ -392,6 +391,12 @@ def send_command(gen_id: str, req: CommandRequest):
             logger.info(f"[{gen_id}] Breaker closed")
         elif req.command == "inject_fault":
             target_gen.faultDetected = True
+            # Immediately drive the state machine into fault state if the
+            # 'faultOccurred' transition is valid from the current state.
+            try:
+                target_gen.sm.fire('faultOccurred')
+            except Exception:
+                pass  # transition not valid from current state — tick loop will handle it
             logger.info(f"[{gen_id}] Fault injected")
         elif req.command == "deexcite_on":
             target_gen.SSL['SSL547_GenDeexcited'] = True
@@ -721,6 +726,11 @@ def send_loadbank_command(lb_id: str, req: CommandRequest):
             target_lb.simulator.disable_modbus_control()
             logger.info(f"[{lb_id}] Modbus control disabled")
         elif req.command == "apply_load":
+            # Clear the 0x08 bit first so apply_load() doesn't think a prior
+            # apply is still pending (the tick loop clears it, but the API
+            # may be called before the next tick runs).
+            ctrl = target_lb.simulator.read_register(1700)
+            target_lb.simulator.write_register(1700, ctrl & ~0x08)
             success = target_lb.simulator.apply_load()
             if success:
                 logger.info(f"[{lb_id}] Load applied")
