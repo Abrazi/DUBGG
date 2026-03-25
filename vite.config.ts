@@ -10,5 +10,12 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    proxy: {
+      // Forward all API calls to the backend running on :8500
+      '/generators': 'http://localhost:8500',
+      '/loadbanks':  'http://localhost:8500',
+      '/switchgears': 'http://localhost:8500',
+      '/admin':      'http://localhost:8500',
+    },
   },
 });

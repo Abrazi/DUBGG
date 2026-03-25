@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { GeneratorStatus } from '../types/generator';
+import { LoadBankStatus } from '../types/loadbank';
 import { AdminStatus } from '../types/admin';
 
 export interface GeneratorLogEntry {
@@ -8,11 +9,11 @@ export interface GeneratorLogEntry {
   message: string;
 }
 
-// In development (Vite dev server on :3000) the API lives on :8000.
+// In development (Vite dev server on :3000) the API lives on :8500.
 // In production the EXE serves both frontend and API on the same port,
 // so a relative URL (empty string) works for any host/IP.
 const API_BASE_URL =
-  import.meta.env.DEV ? 'http://localhost:8000' : '';
+  import.meta.env.DEV ? 'http://localhost:8500' : '';
 
 
 export const fetchAllGenerators = async (): Promise<GeneratorStatus[]> => {
@@ -167,7 +168,6 @@ export const fetchLoadbankLogs = async (
 };
 
 // Load Bank APIs
-import { LoadBankStatus } from '../types/loadbank';
 
 export const fetchAllLoadbanks = async (): Promise<LoadBankStatus[]> => {
   try {
@@ -208,7 +208,7 @@ export const sendLoadbankCommand = async (id: string, command: LBCommand): Promi
 };
 
 export const selectLoadbankLoad = async (
-  id: string, 
+  id: string,
   load: { resistive_kW: number; inductive_kVAr?: number; capacitive_kVAr?: number }
 ): Promise<boolean> => {
   try {
@@ -246,4 +246,4 @@ export const setLoadbankModbusEnabled = async (
     console.error('LB Modbus Enable/Disable Error:', error);
     return { success: false, message: String(error) };
   }
-};
+};

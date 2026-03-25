@@ -1,4 +1,4 @@
-import { Alarm } from '../types/hmi';
+import { Alarm } from '../types/generator';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Bell, AlertTriangle, Info, Check, X } from 'lucide-react';
