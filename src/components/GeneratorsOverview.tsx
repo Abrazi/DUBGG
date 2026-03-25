@@ -5,9 +5,10 @@ import { Power, Settings, ShieldAlert, Cpu } from 'lucide-react';
 
 interface GeneratorsOverviewProps {
   generators: GeneratorStatus[];
+  onEquipmentClick?: (id: string) => void;
 }
 
-export function GeneratorsOverview({ generators }: GeneratorsOverviewProps) {
+export function GeneratorsOverview({ generators, onEquipmentClick }: GeneratorsOverviewProps) {
   const getGpsGroup = (gpsId: string) => {
     return generators.filter(gen => {
       if (gpsId === 'GPS1') {
@@ -56,7 +57,7 @@ export function GeneratorsOverview({ generators }: GeneratorsOverviewProps) {
               </h4>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
                 {groupGenerators.map(gen => (
-                  <GeneratorCard key={`${gpsId}-${gen.id}`} gen={gen} />
+                  <GeneratorCard key={`${gpsId}-${gen.id}`} gen={gen} onClick={() => onEquipmentClick?.(gen.id)} />
                 ))}
               </div>
             </div>
@@ -67,9 +68,9 @@ export function GeneratorsOverview({ generators }: GeneratorsOverviewProps) {
   );
 }
 
-function GeneratorCard({ gen }: { gen: GeneratorStatus }) {
+function GeneratorCard({ gen, onClick }: { gen: GeneratorStatus, onClick?: () => void }) {
   return (
-    <Card className={`bg-slate-900 border-slate-800 hover:border-slate-700 transition-all cursor-pointer group ${gen.isFaulted ? 'ring-1 ring-red-500/50' : ''}`}>
+    <Card className={`bg-slate-900 border-slate-800 hover:border-slate-700 transition-all cursor-pointer group ${gen.isFaulted ? 'ring-1 ring-red-500/50' : ''}`} onClick={onClick}>
       <CardContent className="p-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-white font-bold text-sm">{gen.id}</span>

@@ -141,32 +141,31 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
           </Button>
         </div>
 
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Button
             onClick={() => handleCommand('deexcite_on')}
             disabled={generator.deexcited || generator.state !== 'running'}
-            className="bg-purple-600 hover:bg-purple-700 text-white h-20 w-full flex items-center justify-center gap-2"
+            className="bg-purple-600 hover:bg-purple-700 text-white h-20 flex flex-col items-center justify-center gap-2"
           >
-            Deexcite ON
+            <span>Deexcite ON</span>
           </Button>
           <Button
             onClick={() => handleCommand('deexcite_off')}
             disabled={!generator.deexcited || generator.state !== 'running'}
-            className="bg-purple-600 hover:bg-purple-700 text-white h-20 w-full flex items-center justify-center gap-2"
+            className="bg-purple-600 hover:bg-purple-700 text-white h-20 flex flex-col items-center justify-center gap-2"
           >
-            Deexcite OFF
+            <span>Deexcite OFF</span>
+          </Button>
+          <Button
+            onClick={() => handleCommand('inject_fault')}
+            className="bg-red-600 hover:bg-red-700 text-white h-20 flex flex-col items-center justify-center gap-2"
+          >
+            <ShieldAlert className="w-6 h-6" />
+            <span>Inject Fault</span>
           </Button>
         </div>
 
         <div className="space-y-4">
-          <Button
-            onClick={() => handleCommand('inject_fault')}
-            className="bg-red-500 hover:bg-red-600 text-white h-12 w-full flex items-center justify-center gap-2"
-          >
-            <ShieldAlert className="w-5 h-5" />
-            <span>Inject Fault</span>
-          </Button>
-
           <div className="border-t border-slate-700 pt-4">
             <h4 className="text-slate-300 mb-2">Simulation Options</h4>
             <div className="grid grid-cols-2 gap-2">

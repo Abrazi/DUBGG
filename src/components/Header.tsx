@@ -15,7 +15,7 @@ export function Header({ activeView, onViewChange }: HeaderProps) {
         <div className="flex items-center gap-4">
           <img src={logo} alt="Enersol logo" style={{ width: 212, height: 47, objectFit: 'contain' }} />
           <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Enersol Generator Controller</h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Enersol Plant Controller</h1>
             <p className="text-slate-400 text-sm">Industrial Process Control System</p>
           </div>
         </div>

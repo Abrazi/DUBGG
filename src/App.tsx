@@ -157,7 +157,7 @@ function App() {
         newAlarms.push({
           id: `${data.id}-${f.key}-on-${Date.now()}`,
           type: 'warning',
-          message: `Fault Injected: ${f.name}`,
+          message: `[${data.id}] Fault Injected: ${f.name}`,
           timestamp: new Date(),
           acknowledged: false,
           generatorId: data.id
@@ -166,7 +166,7 @@ function App() {
         newAlarms.push({
           id: `${data.id}-${f.key}-off-${Date.now()}`,
           type: 'info',
-          message: `Fault Removed: ${f.name}`,
+          message: `[${data.id}] Fault Removed: ${f.name}`,
           timestamp: new Date(),
           acknowledged: false,
           generatorId: data.id
@@ -190,6 +190,16 @@ function App() {
 
   const handleClearAllAlarms = () => {
     setAlarms([]);
+  };
+
+  const handleEquipmentClick = (type: 'generator' | 'loadbank', id: string) => {
+    setTargetType(type);
+    if (type === 'generator') {
+      setSelectedGenId(id);
+    } else {
+      setSelectedLbId(id);
+    }
+    setActiveView('dashboard');
   };
 
   return (
@@ -225,8 +235,8 @@ function App() {
               </div>
 
               <SwitchgearsOverview switchgears={allSwitchgears} />
-              <GeneratorsOverview generators={allGenerators} />
-              <LoadBanksOverview loadbanks={allLoadbanks} />
+              <GeneratorsOverview generators={allGenerators} onEquipmentClick={(id) => handleEquipmentClick('generator', id)} />
+              <LoadBanksOverview loadbanks={allLoadbanks} onEquipmentClick={(id) => handleEquipmentClick('loadbank', id)} />
             </div>
           ) : activeView === 'admin' ? (
             <AdministrationPage />

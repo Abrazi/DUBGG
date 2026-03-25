@@ -5,9 +5,10 @@ import { Gauge } from 'lucide-react';
 
 interface LoadBanksOverviewProps {
   loadbanks: LoadBankStatus[];
+  onEquipmentClick?: (id: string) => void;
 }
 
-export function LoadBanksOverview({ loadbanks }: LoadBanksOverviewProps) {
+export function LoadBanksOverview({ loadbanks, onEquipmentClick }: LoadBanksOverviewProps) {
   return (
     <div className="mb-8 mt-8">
       <h3 className="text-xl text-white font-semibold mb-4 flex items-center gap-2">
@@ -16,7 +17,7 @@ export function LoadBanksOverview({ loadbanks }: LoadBanksOverviewProps) {
       </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {loadbanks.map(lb => (
-          <Card key={lb.id} className="bg-slate-900 border-slate-800">
+          <Card key={lb.id} className="bg-slate-900 border-slate-800 hover:border-slate-700 transition-all cursor-pointer group" onClick={() => onEquipmentClick?.(lb.id)}>
             <CardContent className="p-4">
               <div className="flex items-center justify-between mb-4">
                 <span className="text-white font-bold">{lb.id}</span>
