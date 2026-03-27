@@ -421,7 +421,8 @@ class GeneratorController:
                             self.SSL['SSL432_OperOff'] = False
                             self.log("CB CLOSED to dead busbar (SSL704)")
                             self.sm.fire("startComplete")
-                        if bus_is_live and not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
+                        #if bus_is_live and not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
+                        if not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
                             self.SSL['SSL441_SyncGenActivated'] = True
                             self.SSL['SSL547_GenDeexcited'] = False
                             #self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
