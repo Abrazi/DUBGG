@@ -409,7 +409,9 @@ class GeneratorController:
                     if self.SimulateFailToStart:
                         self.log("Start blocked by SimulateFailToStart flag")
                     else:
-                        bus_is_live = self.SSL['SSL710_OthGCBClosedandExcitOn_CMD']
+                        #bus_is_live = self.SSL['SSL710_OthGCBClosedandExcitOn_CMD']
+                        bus_is_live = not self.SSL['SSL709_GenExcitationOff_CMD']
+
                         if self.SSL['SSL709_GenExcitationOff_CMD']:
                             self.SSL['SSL448_ModuleisDemanded'] = True
                             self.SSL['SSL547_GenDeexcited'] = True
