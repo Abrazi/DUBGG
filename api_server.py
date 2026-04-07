@@ -757,9 +757,21 @@ def select_loadbank_load(lb_id: str, req: LoadBankSelectRequest):
     if not target_lb:
         return {"status": "error", "message": "Loadbank not found"}
 
+    server = next((s for s in sim_instance.servers if s.name == lb_id), None)
+    if not server:
+        return {"status": "error", "message": f"Server not found for {lb_id}"}
+
     with target_lb.lock:
         target_lb.simulator.select_load(req.resistive_kW, req.inductive_kVAr, req.capacitive_kVAr)
         logger.info(f"[{lb_id}] Load selected: {req.resistive_kW}kW, {req.inductive_kVAr}kVArL, {req.capacitive_kVAr}kVArC")
+        
+        # Also update the datastore to prevent tick from overwriting
+        w_selected = target_lb.simulator.read_register(1701)
+        varl_selected = target_lb.simulator.read_register(1702)
+        varc_selected = target_lb.simulator.read_register(1703)
+        server.datastore.setValues(3, target_lb.register_base + 1701, [w_selected])
+        server.datastore.setValues(3, target_lb.register_base + 1702, [varl_selected])
+        server.datastore.setValues(3, target_lb.register_base + 1703, [varc_selected])
             
     return {"status": "success", "message": f"Load selected for {lb_id}"}
 
