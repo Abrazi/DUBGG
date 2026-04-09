@@ -241,6 +241,7 @@ class ConfigRequest(BaseModel):
     fail_start_time: Optional[bool] = None
     start_delay: Optional[int] = None
     stop_delay: Optional[int] = None
+    power_reduction_activated: Optional[bool] = None
     # allow service mode change: 'off','manual','auto'
     service_mode: Optional[str] = None
 
@@ -293,6 +294,7 @@ def get_generators():
             "startDelay": gen.StartDelay,
             "stopDelay": gen.StopDelay,
             "deexcited": gen.SSL['SSL547_GenDeexcited'],
+            "powerReductionActivated": gen.SSL['SSL548_PowerReductionActivated'],
             "serviceMode": svc_mode,
             "modbusDisabled": modbus_disabled,
             "fcb1": gen.FCB1,
@@ -339,6 +341,7 @@ def get_generator(gen_id: str):
                 "startDelay": gen.StartDelay,
                 "stopDelay": gen.StopDelay,
                 "deexcited": gen.SSL['SSL547_GenDeexcited'],
+                "powerReductionActivated": gen.SSL['SSL548_PowerReductionActivated'],
                 "serviceMode": svc_mode,
                 "modbusDisabled": modbus_disabled,
                 "fcb1": gen.FCB1,
@@ -477,6 +480,8 @@ def update_config(gen_id: str, cfg: ConfigRequest):
         target_gen.StartDelay = cfg.start_delay
     if cfg.stop_delay is not None:
         target_gen.StopDelay = cfg.stop_delay
+    if cfg.power_reduction_activated is not None:
+        target_gen.SSL['SSL548_PowerReductionActivated'] = cfg.power_reduction_activated
     if cfg.service_mode is not None:
         # enforce only one of the three service switches can be true
         target_gen.SSL['SSL425_ServiceSWOff'] = False

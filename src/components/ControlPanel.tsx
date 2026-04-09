@@ -17,6 +17,7 @@ interface SimConfig {
   failStartTime: boolean;
   startDelay: number;
   stopDelay: number;
+  powerReductionActivated: boolean;
   serviceMode: 'off' | 'manual' | 'auto';
 }
 
@@ -28,6 +29,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
     failStartTime: generator.failStartTime || false,
     startDelay: generator.startDelay || 0,
     stopDelay: generator.stopDelay || 0,
+    powerReductionActivated: generator.powerReductionActivated || false,
     serviceMode: generator.serviceMode || 'auto',
   });
 
@@ -43,6 +45,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
         failStartTime: generator.failStartTime || false,
         startDelay: generator.startDelay || 0,
         stopDelay: generator.stopDelay || 0,
+        powerReductionActivated: generator.powerReductionActivated || false,
         serviceMode: generator.serviceMode || 'auto',
       });
     }
@@ -74,6 +77,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
       fail_start_time: cfg.failStartTime,
       start_delay: cfg.startDelay,
       stop_delay: cfg.stopDelay,
+      power_reduction_activated: cfg.powerReductionActivated,
       service_mode: cfg.serviceMode,
     });
     setTimeout(onUpdate, 500);
@@ -211,6 +215,14 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
                   onChange={e => setConfig({ ...config, failStartTime: e.target.checked })}
                 />
                 Fail Start Time
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={config.powerReductionActivated}
+                  onChange={e => setConfig({ ...config, powerReductionActivated: e.target.checked })}
+                />
+                Power Reduction Act
               </label>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">

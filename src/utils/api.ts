@@ -78,6 +78,7 @@ interface ConfigPayload {
   fail_start_time?: boolean;
   start_delay?: number;
   stop_delay?: number;
+  power_reduction_activated?: boolean;
   // optional service switch mode value
   service_mode?: 'off' | 'manual' | 'auto';
 }
