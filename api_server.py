@@ -1,19 +1,17 @@
-import asyncio
 import collections
 import logging
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import List, Optional, Dict, Tuple, Any
-from fastapi import FastAPI, APIRouter, Request
-from fastapi.responses import HTMLResponse
+from typing import Any, Dict, List, Optional
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psutil
 import platform
 import socket
 import os
-from contextlib import asynccontextmanager
 
 # Import the simulation logic from the file containing your provided code
 # Ensure your provided code is saved as 'generator_sim.py'
@@ -184,8 +182,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from typing import Any
-
 # Global simulation instance (initialized to None until started)
 sim_instance: Any = None
 
@@ -245,6 +241,7 @@ class ConfigRequest(BaseModel):
     fail_start_time: Optional[bool] = None
     start_delay: Optional[int] = None
     stop_delay: Optional[int] = None
+    power_reduction_activated: Optional[bool] = None
     # allow service mode change: 'off','manual','auto'
     service_mode: Optional[str] = None
 
@@ -297,8 +294,11 @@ def get_generators():
             "startDelay": gen.StartDelay,
             "stopDelay": gen.StopDelay,
             "deexcited": gen.SSL['SSL547_GenDeexcited'],
+            "powerReductionActivated": gen.SSL['SSL548_PowerReductionActivated'],
             "serviceMode": svc_mode,
             "modbusDisabled": modbus_disabled,
+            "fcb1": gen.FCB1,
+            "fcb2": gen.FCB2,
             # heartbeat supervision (R192 Bit 7)
             "heartbeatFailed": gen.heartbeat_failed,
             "secondsSinceHeartbeat": float(f"{time.time() - gen.last_heartbeat_time:.1f}"),
@@ -341,8 +341,11 @@ def get_generator(gen_id: str):
                 "startDelay": gen.StartDelay,
                 "stopDelay": gen.StopDelay,
                 "deexcited": gen.SSL['SSL547_GenDeexcited'],
+                "powerReductionActivated": gen.SSL['SSL548_PowerReductionActivated'],
                 "serviceMode": svc_mode,
                 "modbusDisabled": modbus_disabled,
+                "fcb1": gen.FCB1,
+                "fcb2": gen.FCB2,
                 # heartbeat supervision (R192 Bit 7)
                 "heartbeatFailed": gen.heartbeat_failed,
                 "secondsSinceHeartbeat": float(f"{time.time() - gen.last_heartbeat_time:.1f}"),
@@ -369,14 +372,17 @@ def send_command(gen_id: str, req: CommandRequest):
             target_gen.SSL['SSL701_DemandModule_CMD'] = False
             logger.info(f"[{gen_id}] Stop Command Sent")
         elif req.command == "reset_fault":
-            # Set Reset Fault Bit (Bit 4 of R095)
-            # Note: In the simulation logic, this clears faultDetected
+            # Clear faultDetected so the tick loop stops trying to transition.
+            # Only fire 'faultCleared' if the state machine is actually in the
+            # fault state to avoid an invalid-transition exception.
             target_gen.faultDetected = False
-            target_gen.sm.fire("faultCleared")
+            if target_gen.sm.state == 'fault':
+                target_gen.sm.fire('faultCleared')
             logger.info(f"[{gen_id}] Fault Reset Sent")
         elif req.command == "open_breaker":
-            # open circuit breaker
+            # open circuit breaker — set Open flag, clear Closed flag
             target_gen.SSL['SSL429_GenCBClosed'] = False
+            target_gen.SSL['SSL430_GenCBOpen'] = True
             logger.info(f"[{gen_id}] Breaker opened")
         elif req.command == "close_breaker":
             # allow closing breaker only when service switch is in MANUAL
@@ -388,6 +394,12 @@ def send_command(gen_id: str, req: CommandRequest):
             logger.info(f"[{gen_id}] Breaker closed")
         elif req.command == "inject_fault":
             target_gen.faultDetected = True
+            # Immediately drive the state machine into fault state if the
+            # 'faultOccurred' transition is valid from the current state.
+            try:
+                target_gen.sm.fire('faultOccurred')
+            except Exception:
+                pass  # transition not valid from current state — tick loop will handle it
             logger.info(f"[{gen_id}] Fault injected")
         elif req.command == "deexcite_on":
             target_gen.SSL['SSL547_GenDeexcited'] = True
@@ -468,6 +480,8 @@ def update_config(gen_id: str, cfg: ConfigRequest):
         target_gen.StartDelay = cfg.start_delay
     if cfg.stop_delay is not None:
         target_gen.StopDelay = cfg.stop_delay
+    if cfg.power_reduction_activated is not None:
+        target_gen.SSL['SSL548_PowerReductionActivated'] = cfg.power_reduction_activated
     if cfg.service_mode is not None:
         # enforce only one of the three service switches can be true
         target_gen.SSL['SSL425_ServiceSWOff'] = False
@@ -660,12 +674,12 @@ def get_loadbanks():
             "control_on": status["control_on"],
             "status_bits": status["status_bits"],
             "error_bits": status["error_bits"],
-            "activePower": lb.simulator.read_register(1019) / 10.0,
-            "reactivePower": lb.simulator.read_register(1020) / 10.0,
-            "apparentPower": lb.simulator.read_register(1021) / 10.0,
-            "powerFactor": lb.simulator.read_register(1022) / 100.0,
-            "l1l2Voltage": lb.simulator.read_register(1006) / 10.0,
-            "frequency": lb.simulator.read_register(1015) / 100.0,
+            "activePower": lb.simulator.read_register(1018) / 10.0,
+            "reactivePower": lb.simulator.read_register(1019) / 10.0,
+            "apparentPower": lb.simulator.read_register(1020) / 10.0,
+            "powerFactor": lb.simulator.read_register(1021) / 100.0,
+            "l1l2Voltage": lb.simulator.read_register(1005) / 10.0,
+            "frequency": lb.simulator.read_register(1014) / 100.0,
             "modbusDisabled": modbus_disabled
         })
     return lb_list
@@ -689,12 +703,12 @@ def get_loadbank(lb_id: str):
                 "control_on": status["control_on"],
                 "status_bits": status["status_bits"],
                 "error_bits": status["error_bits"],
-                "activePower": lb.simulator.read_register(1019) / 10.0,
-                "reactivePower": lb.simulator.read_register(1020) / 10.0,
-                "apparentPower": lb.simulator.read_register(1021) / 10.0,
-                "powerFactor": lb.simulator.read_register(1022) / 100.0,
-                "l1l2Voltage": lb.simulator.read_register(1006) / 10.0,
-                "frequency": lb.simulator.read_register(1015) / 100.0,
+                "activePower": lb.simulator.read_register(1018) / 10.0,
+                "reactivePower": lb.simulator.read_register(1019) / 10.0,
+                "apparentPower": lb.simulator.read_register(1020) / 10.0,
+                "powerFactor": lb.simulator.read_register(1021) / 100.0,
+                "l1l2Voltage": lb.simulator.read_register(1005) / 10.0,
+                "frequency": lb.simulator.read_register(1014) / 100.0,
                 "modbusDisabled": modbus_disabled
             }
     return None
@@ -717,6 +731,11 @@ def send_loadbank_command(lb_id: str, req: CommandRequest):
             target_lb.simulator.disable_modbus_control()
             logger.info(f"[{lb_id}] Modbus control disabled")
         elif req.command == "apply_load":
+            # Clear the 0x08 bit first so apply_load() doesn't think a prior
+            # apply is still pending (the tick loop clears it, but the API
+            # may be called before the next tick runs).
+            ctrl = target_lb.simulator.read_register(1700)
+            target_lb.simulator.write_register(1700, ctrl & ~0x08)
             success = target_lb.simulator.apply_load()
             if success:
                 logger.info(f"[{lb_id}] Load applied")
@@ -743,9 +762,21 @@ def select_loadbank_load(lb_id: str, req: LoadBankSelectRequest):
     if not target_lb:
         return {"status": "error", "message": "Loadbank not found"}
 
+    server = next((s for s in sim_instance.servers if s.name == lb_id), None)
+    if not server:
+        return {"status": "error", "message": f"Server not found for {lb_id}"}
+
     with target_lb.lock:
         target_lb.simulator.select_load(req.resistive_kW, req.inductive_kVAr, req.capacitive_kVAr)
         logger.info(f"[{lb_id}] Load selected: {req.resistive_kW}kW, {req.inductive_kVAr}kVArL, {req.capacitive_kVAr}kVArC")
+        
+        # Also update the datastore to prevent tick from overwriting
+        w_selected = target_lb.simulator.read_register(1701)
+        varl_selected = target_lb.simulator.read_register(1702)
+        varc_selected = target_lb.simulator.read_register(1703)
+        server.datastore.setValues(3, target_lb.register_base + 1701, [w_selected])
+        server.datastore.setValues(3, target_lb.register_base + 1702, [varl_selected])
+        server.datastore.setValues(3, target_lb.register_base + 1703, [varc_selected])
             
     return {"status": "success", "message": f"Load selected for {lb_id}"}
 
@@ -781,6 +812,40 @@ def get_loadbank_logs(lb_id: str, limit: int = 100):
         entries = list(buf)
     # Return newest-first, up to `limit`
     return list(reversed(entries))[:limit]  # pyre-ignore
+
+
+@router.get("/switchgears")
+def get_switchgears():
+    """Get status of all switchgears"""
+    if not sim_instance:
+        return []
+
+    swg_list = []
+    for swg in sim_instance.switchgears:
+        server = next((s for s in sim_instance.servers if s.name == swg.id), None)
+        demand = 0
+        online_count = 0
+
+        if server and server.datastore:
+            try:
+                with server.datastore_lock:
+                    d_vals = server.datastore.getValues(3, 74, count=1)
+                    if isinstance(d_vals, list) and len(d_vals) > 0:
+                        demand = d_vals[0]
+
+                    o_vals = server.datastore.getValues(3, 901, count=1)
+                    if isinstance(o_vals, list) and len(o_vals) > 0:
+                        online_count = o_vals[0]
+            except Exception:
+                pass
+
+        swg_list.append({
+            "id": swg.id,
+            "demand": demand,
+            "onlineCount": online_count,
+            "modbusDisabled": server.modbus_disabled if server else False
+        })
+    return swg_list
 
 app.include_router(router)
 

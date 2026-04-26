@@ -5,7 +5,7 @@ export interface ServerStatus {
     is_running: boolean;
     is_port_open: boolean;
     modbusDisabled: boolean;
-    type: 'generator' | 'switchgear';
+    type: 'generator' | 'switchgear' | 'loadbank';
 }
 
 export interface SystemInfo {

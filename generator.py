@@ -151,6 +151,7 @@ class GeneratorController:
         self.last_heartbeat_time = time.time()
         self.heartbeat_failed = False
         self.HEARTBEAT_TIMEOUT = 60.0  # 60 seconds — auto-shutdown if no heartbeat
+        self.externalControlActive = False
 
         self.SSL = {
             'SSL425_ServiceSWOff': False,
@@ -409,7 +410,9 @@ class GeneratorController:
                     if self.SimulateFailToStart:
                         self.log("Start blocked by SimulateFailToStart flag")
                     else:
-                        bus_is_live = self.SSL['SSL710_OthGCBClosedandExcitOn_CMD']
+                        #bus_is_live = self.SSL['SSL710_OthGCBClosedandExcitOn_CMD']
+                        bus_is_live = not self.SSL['SSL709_GenExcitationOff_CMD']
+
                         if self.SSL['SSL709_GenExcitationOff_CMD']:
                             self.SSL['SSL448_ModuleisDemanded'] = True
                             self.SSL['SSL547_GenDeexcited'] = True
@@ -421,10 +424,11 @@ class GeneratorController:
                             self.SSL['SSL432_OperOff'] = False
                             self.log("CB CLOSED to dead busbar (SSL704)")
                             self.sm.fire("startComplete")
-                        if bus_is_live and not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
+                        #if bus_is_live and not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
+                        if not self.SSL['SSL709_GenExcitationOff_CMD'] and self.SSL['SSL430_GenCBOpen']:
                             self.SSL['SSL441_SyncGenActivated'] = True
                             self.SSL['SSL547_GenDeexcited'] = False
-                            self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
+                            #self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
                             phase_angle_ok = True
                             if phase_angle_ok:
                                 self.SSL['SSL429_GenCBClosed'] = True
@@ -472,8 +476,10 @@ class GeneratorController:
             self.SSL['SSL427_ServiceSWAuto'] = True
         if self.SSL['SSL430_GenCBOpen']:
             self.SSL['SSL429_GenCBClosed'] = False
+            self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = False
         elif self.SSL['SSL429_GenCBClosed']:
             self.SSL['SSL430_GenCBOpen'] = False
+            self.SSL['SSL3630_ReleaseLoadAfterGenExcit'] = True
         else:
             self.SSL['SSL430_GenCBOpen'] = True
         if self.SSL['SSL431_OperOn']:
@@ -609,6 +615,16 @@ class GeneratorController:
                     self.parse_R192(current_R192)
                     self.previousR192 = current_R192
 
+            R199 = datastore.getValues(3, self.register_base + 199, count=1)
+            if isinstance(R199, list) and len(R199) > 0:
+                is_external = (R199[0] != 0)
+                if is_external != self.externalControlActive:
+                    self.externalControlActive = is_external
+                    if is_external:
+                        self.log("External controller assumed control (R199 != 0). Modbus writes blocked.")
+                    else:
+                        self.log("Internal controller resumed control (R199 == 0). Modbus writes restored.")
+
             # Heartbeat supervision: if R192 Bit 7 (SSL708_ClockPulse_CMD) stops toggling
             # for longer than HEARTBEAT_TIMEOUT seconds, trigger automatic shutdown.
             #
@@ -633,76 +649,77 @@ class GeneratorController:
             # Now calculate simulation dynamics based on current state
             self.update_simulation_dynamics()
 
-            datastore.setValues(3, self.register_base + 129, [int(self.SimulatedActivePower)])
-            datastore.setValues(3, self.register_base + 130, [int(self.SimulatedReactivePower)])
-            datastore.setValues(3, self.register_base + 76, [int(self.SimulatedFrequency * 100)])
-            datastore.setValues(3, self.register_base + 77, [int(self.SimulatedCurrent)])
-            datastore.setValues(3, self.register_base + 78, [int(self.SimulatedVoltage)])
-
-            R014 = 0
-            if self.SSL['SSL425_ServiceSWOff']: R014 |= (1 << 0)
-            if self.SSL['SSL426_ServiceSWManual']: R014 |= (1 << 1)
-            if self.SSL['SSL427_ServiceSWAuto']: R014 |= (1 << 2)
-            if self.SSL['SSL429_GenCBClosed']: R014 |= (1 << 4)
-            if self.SSL['SSL430_GenCBOpen']: R014 |= (1 << 5)
-            if self.SSL['SSL431_OperOn']: R014 |= (1 << 6)
-            if self.SSL['SSL432_OperOff']: R014 |= (1 << 7)
-            if self.SSL['SSL449_OperEngineisRunning']: R014 |= (1 << 8)
-            if self.SSL['SSL441_SyncGenActivated']: R014 |= (1 << 9)
-            if self.SSL['SSL435_MainsCBClosed']: R014 |= (1 << 10)
-            if self.SSL['SSL452_GeneralTrip']: R014 |= (1 << 11)
-            if self.SSL['SSL437_TurboChUnitGeneralTrip']: R014 |= (1 << 12)
-            if self.SSL['SSL438_TurboChUnitGeneralWarn']: R014 |= (1 << 13)
-            if self.SSL['SSL439_IgnSysGeneralTrip']: R014 |= (1 << 14)
-            if self.SSL['SSL440_IgnSysGeneralWarn']: R014 |= (1 << 15)
-            datastore.setValues(3, self.register_base + 14, [R014])
-
-            R015 = 0
-            if self.SSL['SSL441_SyncGenActivated']: R015 |= (1 << 0)
-            if self.SSL['SSL443_EngineInStartingPhase']: R015 |= (1 << 2)
-            if self.SSL['SSL444_ReadyforAutoDem']: R015 |= (1 << 3)
-            if self.SSL['SSL445_DemandforAux']: R015 |= (1 << 4)
-            if self.SSL['SSL448_ModuleisDemanded']: R015 |= (1 << 7)
-            if self.SSL['SSL449_OperEngineisRunning']: R015 |= (1 << 8)
-            if self.SSL['SSL452_GeneralTrip']: R015 |= (1 << 11)
-            if self.SSL['SSL453_GeneralWarn']: R015 |= (1 << 12)
-            datastore.setValues(3, self.register_base + 15, [R015])
-
-            R023 = 0
-            if self.SSL['SSL563_ReadyforFastStart']: R023 |= (1 << 12)
-            if self.SSL['SSL564_ModuleLockedOut']: R023 |= (1 << 15)
-            datastore.setValues(3, self.register_base + 23, [R023])
-
-            R029 = 0
-            if self.SSL['SSL3612_EmergStopPBEngRoom']: R029 |= (1 << 3)
-            if self.SSL['SSL3613_EmergStopPBEngVentRoom']: R029 |= (1 << 4)
-            if self.SSL['SSL3614_EmergStopPBLVMVCtrlRoom']: R029 |= (1 << 5)
-            if self.SSL['SSL3615_EmergStopPBExtCustom']: R029 |= (1 << 6)
-            if self.SSL['SSL3616_AuxSupplySource1']: R029 |= (1 << 7)
-            if self.SSL['SSL3617_AuxSupplySource2']: R029 |= (1 << 8)
-            if self.SSL['SSL3624_TrAppPowExceeded']: R029 |= (1 << 15)
-            datastore.setValues(3, self.register_base + 29, [R029])
-
-            R030 = 0
-            if self.SSL['SSL3625_EngSmoothLoadRejectStart']: R030 |= (1 << 0)
-            if self.SSL['SSL3626_LoadRejWaitforReleaseSync']: R030 |= (1 << 1)
-            if self.SSL['SSL3627_GenAntiCondensHeatInOper']: R030 |= (1 << 2)
-            if self.SSL['SSL3630_ReleaseLoadAfterGenExcit']: R030 |= (1 << 5)
-            datastore.setValues(3, self.register_base + 30, [R030])
-
-            R031 = 0
-            if self.SSL['SSL592_EngineAtStandStill']: R031 |= (1 << 1)
-            if self.SSL['SSL593_ScaveningInOper']: R031 |= (1 << 2)
-            datastore.setValues(3, self.register_base + 31, [R031])
-
-            R109 = 0
-            if self.SSL['SSL545_UtilityOperModuleBlocked']: R109 |= (1 << 0)
-            if self.SSL['SSL546_GenBreakerOpenFail']: R109 |= (1 << 1)
-            if self.SSL['SSL547_GenDeexcited']: R109 |= (1 << 2)
-            if self.SSL['SSL548_PowerReductionActivated']: R109 |= (1 << 3)
-            if self.SSL['SSL549_LoadRejectedGCBOpen']: R109 |= (1 << 4)
-            if self.SSL['SSL550_GenSyncLoadReleas']: R109 |= (1 << 5)
-            datastore.setValues(3, self.register_base + 109, [R109])
+            if not self.externalControlActive:
+                datastore.setValues(3, self.register_base + 129, [int(self.SimulatedActivePower)])
+                datastore.setValues(3, self.register_base + 130, [int(self.SimulatedReactivePower)])
+                datastore.setValues(3, self.register_base + 76, [int(self.SimulatedFrequency * 100)])
+                datastore.setValues(3, self.register_base + 77, [int(self.SimulatedCurrent)])
+                datastore.setValues(3, self.register_base + 78, [int(self.SimulatedVoltage)])
+    
+                R014 = 0
+                if self.SSL['SSL425_ServiceSWOff']: R014 |= (1 << 0)
+                if self.SSL['SSL426_ServiceSWManual']: R014 |= (1 << 1)
+                if self.SSL['SSL427_ServiceSWAuto']: R014 |= (1 << 2)
+                if self.SSL['SSL429_GenCBClosed']: R014 |= (1 << 4)
+                if self.SSL['SSL430_GenCBOpen']: R014 |= (1 << 5)
+                if self.SSL['SSL431_OperOn']: R014 |= (1 << 6)
+                if self.SSL['SSL432_OperOff']: R014 |= (1 << 7)
+                if self.SSL['SSL449_OperEngineisRunning']: R014 |= (1 << 8)
+                if self.SSL['SSL441_SyncGenActivated']: R014 |= (1 << 9)
+                if self.SSL['SSL435_MainsCBClosed']: R014 |= (1 << 10)
+                if self.SSL['SSL452_GeneralTrip']: R014 |= (1 << 11)
+                if self.SSL['SSL437_TurboChUnitGeneralTrip']: R014 |= (1 << 12)
+                if self.SSL['SSL438_TurboChUnitGeneralWarn']: R014 |= (1 << 13)
+                if self.SSL['SSL439_IgnSysGeneralTrip']: R014 |= (1 << 14)
+                if self.SSL['SSL440_IgnSysGeneralWarn']: R014 |= (1 << 15)
+                datastore.setValues(3, self.register_base + 14, [R014])
+    
+                R015 = 0
+                if self.SSL['SSL441_SyncGenActivated']: R015 |= (1 << 0)
+                if self.SSL['SSL443_EngineInStartingPhase']: R015 |= (1 << 2)
+                if self.SSL['SSL444_ReadyforAutoDem']: R015 |= (1 << 3)
+                if self.SSL['SSL445_DemandforAux']: R015 |= (1 << 4)
+                if self.SSL['SSL448_ModuleisDemanded']: R015 |= (1 << 7)
+                if self.SSL['SSL449_OperEngineisRunning']: R015 |= (1 << 8)
+                if self.SSL['SSL452_GeneralTrip']: R015 |= (1 << 11)
+                if self.SSL['SSL453_GeneralWarn']: R015 |= (1 << 12)
+                datastore.setValues(3, self.register_base + 15, [R015])
+    
+                R023 = 0
+                if self.SSL['SSL563_ReadyforFastStart']: R023 |= (1 << 12)
+                if self.SSL['SSL564_ModuleLockedOut']: R023 |= (1 << 15)
+                datastore.setValues(3, self.register_base + 23, [R023])
+    
+                R029 = 0
+                if self.SSL['SSL3612_EmergStopPBEngRoom']: R029 |= (1 << 3)
+                if self.SSL['SSL3613_EmergStopPBEngVentRoom']: R029 |= (1 << 4)
+                if self.SSL['SSL3614_EmergStopPBLVMVCtrlRoom']: R029 |= (1 << 5)
+                if self.SSL['SSL3615_EmergStopPBExtCustom']: R029 |= (1 << 6)
+                if self.SSL['SSL3616_AuxSupplySource1']: R029 |= (1 << 7)
+                if self.SSL['SSL3617_AuxSupplySource2']: R029 |= (1 << 8)
+                if self.SSL['SSL3624_TrAppPowExceeded']: R029 |= (1 << 15)
+                datastore.setValues(3, self.register_base + 29, [R029])
+    
+                R030 = 0
+                if self.SSL['SSL3625_EngSmoothLoadRejectStart']: R030 |= (1 << 0)
+                if self.SSL['SSL3626_LoadRejWaitforReleaseSync']: R030 |= (1 << 1)
+                if self.SSL['SSL3627_GenAntiCondensHeatInOper']: R030 |= (1 << 2)
+                if self.SSL['SSL3630_ReleaseLoadAfterGenExcit']: R030 |= (1 << 5)
+                datastore.setValues(3, self.register_base + 30, [R030])
+    
+                R031 = 0
+                if self.SSL['SSL592_EngineAtStandStill']: R031 |= (1 << 1)
+                if self.SSL['SSL593_ScaveningInOper']: R031 |= (1 << 2)
+                datastore.setValues(3, self.register_base + 31, [R031])
+    
+                R109 = 0
+                if self.SSL['SSL545_UtilityOperModuleBlocked']: R109 |= (1 << 0)
+                if self.SSL['SSL546_GenBreakerOpenFail']: R109 |= (1 << 1)
+                if self.SSL['SSL547_GenDeexcited']: R109 |= (1 << 2)
+                if self.SSL['SSL548_PowerReductionActivated']: R109 |= (1 << 3)
+                if self.SSL['SSL549_LoadRejectedGCBOpen']: R109 |= (1 << 4)
+                if self.SSL['SSL550_GenSyncLoadReleas']: R109 |= (1 << 5)
+                datastore.setValues(3, self.register_base + 109, [R109])
 
             if self.sm.state == 'running' and self.SSL['SSL703_MainsCBClosed_CMD'] and self.SSL['SSL430_GenCBOpen']:
                 voltage_ready = abs(self.SimulatedVoltage - self.ExcitedVoltage) < VOLTAGE_EPSILON

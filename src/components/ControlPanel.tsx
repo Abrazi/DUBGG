@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { GeneratorStatus } from '../types/generator';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -17,8 +17,10 @@ interface SimConfig {
   failStartTime: boolean;
   startDelay: number;
   stopDelay: number;
+  powerReductionActivated: boolean;
   serviceMode: 'off' | 'manual' | 'auto';
 }
+
 export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
   const [config, setConfig] = useState<SimConfig>({
     simulateFailToStart: generator.simulateFailToStart || false,
@@ -27,19 +29,26 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
     failStartTime: generator.failStartTime || false,
     startDelay: generator.startDelay || 0,
     stopDelay: generator.stopDelay || 0,
+    powerReductionActivated: generator.powerReductionActivated || false,
     serviceMode: generator.serviceMode || 'auto',
   });
 
+  // Sync config when the selected generator changes (different id)
+  const prevGenId = useRef(generator.id);
   useEffect(() => {
-    setConfig({
-      simulateFailToStart: generator.simulateFailToStart || false,
-      failRampUp: generator.failRampUp || false,
-      failRampDown: generator.failRampDown || false,
-      failStartTime: generator.failStartTime || false,
-      startDelay: generator.startDelay || 0,
-      stopDelay: generator.stopDelay || 0,
-      serviceMode: generator.serviceMode || 'auto',
-    });
+    if (generator.id !== prevGenId.current) {
+      prevGenId.current = generator.id;
+      setConfig({
+        simulateFailToStart: generator.simulateFailToStart || false,
+        failRampUp: generator.failRampUp || false,
+        failRampDown: generator.failRampDown || false,
+        failStartTime: generator.failStartTime || false,
+        startDelay: generator.startDelay || 0,
+        stopDelay: generator.stopDelay || 0,
+        powerReductionActivated: generator.powerReductionActivated || false,
+        serviceMode: generator.serviceMode || 'auto',
+      });
+    }
   }, [generator]);
 
   const handleCommand = async (
@@ -60,37 +69,43 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
     }
   };
 
-  const applyConfig = async () => {
-    const success = await updateGeneratorConfig(generator.id, {
-      simulate_fail_to_start: config.simulateFailToStart,
-      fail_ramp_up: config.failRampUp,
-      fail_ramp_down: config.failRampDown,
-      fail_start_time: config.failStartTime,
-      start_delay: config.startDelay,
-      stop_delay: config.stopDelay,
-      service_mode: config.serviceMode,
+  const applyConfig = useCallback(async (cfg: SimConfig) => {
+    await updateGeneratorConfig(generator.id, {
+      simulate_fail_to_start: cfg.simulateFailToStart,
+      fail_ramp_up: cfg.failRampUp,
+      fail_ramp_down: cfg.failRampDown,
+      fail_start_time: cfg.failStartTime,
+      start_delay: cfg.startDelay,
+      stop_delay: cfg.stopDelay,
+      power_reduction_activated: cfg.powerReductionActivated,
+      service_mode: cfg.serviceMode,
     });
-    if (success) {
-      setTimeout(onUpdate, 500);
-    }
-  };
+    setTimeout(onUpdate, 500);
+  }, [generator.id, onUpdate]);
 
-  // whenever config object changes, push update to backend automatically
-  const firstUpdate = useRef(true);
+  // Debounce auto-push: boolean toggles fire immediately; number inputs wait 600 ms
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRender = useRef(true);
+
   useEffect(() => {
-    if (firstUpdate.current) {
-      firstUpdate.current = false;
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
       return;
     }
-    applyConfig();
-  }, [config]);
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      applyConfig(config);
+    }, 400);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleModbusToggle = async (enable: boolean) => {
     const result = await setModbusEnabled(generator.id, enable);
     if (result.success) {
       setTimeout(onUpdate, 600);
     } else {
-      // show error to user (simple alert for now)
       alert(`Failed to ${enable ? 'enable' : 'disable'} device: ${result.message}`);
     }
   };
@@ -141,32 +156,31 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
           </Button>
         </div>
 
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Button
             onClick={() => handleCommand('deexcite_on')}
             disabled={generator.deexcited || generator.state !== 'running'}
-            className="bg-purple-600 hover:bg-purple-700 text-white h-20 w-full flex items-center justify-center gap-2"
+            className="bg-purple-600 hover:bg-purple-700 text-white h-20 flex flex-col items-center justify-center gap-2"
           >
-            Deexcite ON
+            <span>Deexcite ON</span>
           </Button>
           <Button
             onClick={() => handleCommand('deexcite_off')}
             disabled={!generator.deexcited || generator.state !== 'running'}
-            className="bg-purple-600 hover:bg-purple-700 text-white h-20 w-full flex items-center justify-center gap-2"
+            className="bg-purple-600 hover:bg-purple-700 text-white h-20 flex flex-col items-center justify-center gap-2"
           >
-            Deexcite OFF
+            <span>Deexcite OFF</span>
+          </Button>
+          <Button
+            onClick={() => handleCommand('inject_fault')}
+            className="bg-red-600 hover:bg-red-700 text-white h-20 flex flex-col items-center justify-center gap-2"
+          >
+            <ShieldAlert className="w-6 h-6" />
+            <span>Inject Fault</span>
           </Button>
         </div>
 
         <div className="space-y-4">
-          <Button
-            onClick={() => handleCommand('inject_fault')}
-            className="bg-red-500 hover:bg-red-600 text-white h-12 w-full flex items-center justify-center gap-2"
-          >
-            <ShieldAlert className="w-5 h-5" />
-            <span>Inject Fault</span>
-          </Button>
-
           <div className="border-t border-slate-700 pt-4">
             <h4 className="text-slate-300 mb-2">Simulation Options</h4>
             <div className="grid grid-cols-2 gap-2">
@@ -202,22 +216,38 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
                 />
                 Fail Start Time
               </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={config.powerReductionActivated}
+                  onChange={e => setConfig({ ...config, powerReductionActivated: e.target.checked })}
+                />
+                Power Reduction Act
+              </label>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                value={config.startDelay}
-                onChange={e => setConfig({ ...config, startDelay: Number(e.target.value) })}
-                className="w-full bg-slate-700 text-white p-1 rounded"
-                placeholder="Start Delay"
-              />
-              <input
-                type="number"
-                value={config.stopDelay}
-                onChange={e => setConfig({ ...config, stopDelay: Number(e.target.value) })}
-                className="w-full bg-slate-700 text-white p-1 rounded"
-                placeholder="Stop Delay"
-              />
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Start Delay (s)</label>
+                <input
+                  type="number"
+                  value={config.startDelay}
+                  onChange={e => setConfig({ ...config, startDelay: Number(e.target.value) })}
+                  className="w-full bg-slate-700 text-white p-1 rounded"
+                  placeholder="Start Delay"
+                  min="0"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Stop Delay (s)</label>
+                <input
+                  type="number"
+                  value={config.stopDelay}
+                  onChange={e => setConfig({ ...config, stopDelay: Number(e.target.value) })}
+                  className="w-full bg-slate-700 text-white p-1 rounded"
+                  placeholder="Stop Delay"
+                  min="0"
+                />
+              </div>
             </div>
             <div className="mt-4">
               <label className="block text-sm text-slate-300 mb-1">Service Switch Mode</label>
@@ -231,7 +261,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
                 <option value="off">Off</option>
               </select>
             </div>
-            {/* button removed - config updates are applied automatically */}
+            <p className="text-slate-500 text-xs mt-2">Changes are applied automatically after a short delay.</p>
           </div>
         </div>
 
@@ -261,7 +291,7 @@ export function ControlPanel({ generator, onUpdate }: ControlPanelProps) {
                 ? 'bg-red-600/30 text-red-300 border border-red-500/50'
                 : 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
               }`}>
-              {generator.modbusDisabled ? '⬛ OFFLINE — Device Failure' : '🟢 ONLINE'}
+              {generator.modbusDisabled ? 'OFFLINE — Device Failure' : 'ONLINE'}
             </span>
           </div>
           <p className="text-slate-500 text-xs mb-3">

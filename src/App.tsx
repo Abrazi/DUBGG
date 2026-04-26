@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Header } from './components/Header';
 import { MonitoringDashboard } from './components/MonitoringDashboard';
 import { ControlPanel } from './components/ControlPanel';
 import { AlarmPanel } from './components/AlarmPanel';
 import { GeneratorsOverview } from './components/GeneratorsOverview';
+import { SwitchgearsOverview, SwitchgearStatus } from './components/SwitchgearsOverview';
 import { GeneratorLogWindow } from './components/GeneratorLogWindow';
 import { AdministrationPage } from './components/AdministrationPage';
 import { LoadBanksOverview } from './components/LoadBanksOverview';
@@ -11,12 +12,12 @@ import { LoadBankControlPanel } from './components/LoadBankControlPanel';
 import { LoadbankLogWindow } from './components/LoadbankLogWindow';
 import { GeneratorStatus, Alarm } from './types/generator';
 import { LoadBankStatus } from './types/loadbank';
-import { fetchAllGenerators, fetchGenerator, fetchAllLoadbanks, fetchLoadbank } from './utils/api';
+import { fetchAllGenerators, fetchGenerator, fetchAllLoadbanks, fetchLoadbank, fetchSwitchgears } from './utils/api';
 // using native select instead of custom UI component
 
 
 function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'admin'>('dashboard');
+  const [activeView, setActiveView] = useState<'overview' | 'dashboard' | 'admin'>('overview');
   const [allGenerators, setAllGenerators] = useState<GeneratorStatus[]>([]);
   const [selectedGenId, setSelectedGenId] = useState<string>("");
   const [currentGenerator, setCurrentGenerator] = useState<GeneratorStatus | null>(null);
@@ -24,10 +25,18 @@ function App() {
   const [allLoadbanks, setAllLoadbanks] = useState<LoadBankStatus[]>([]);
   const [selectedLbId, setSelectedLbId] = useState<string>("");
   const [currentLoadbank, setCurrentLoadbank] = useState<LoadBankStatus | null>(null);
+  const [allSwitchgears, setAllSwitchgears] = useState<SwitchgearStatus[]>([]);
   const [targetType, setTargetType] = useState<'generator' | 'loadbank'>('generator');
 
   const [historicalData, setHistoricalData] = useState<Array<{ time: string; voltage: number; power: number; frequency: number }>>([]);
   const [alarms, setAlarms] = useState<Alarm[]>([]);
+
+  // Refs to hold the latest selected IDs so polling callbacks never go stale
+  const selectedGenIdRef = useRef(selectedGenId);
+  const selectedLbIdRef = useRef(selectedLbId);
+
+  useEffect(() => { selectedGenIdRef.current = selectedGenId; }, [selectedGenId]);
+  useEffect(() => { selectedLbIdRef.current = selectedLbId; }, [selectedLbId]);
 
   // Fetch all generators list
   useEffect(() => {
@@ -45,17 +54,18 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch specific generator details
-  const refreshCurrentGenerator = async () => {
-    if (selectedGenId) {
-      const data = await fetchGenerator(selectedGenId);
+  // Fetch specific generator details — use ref so the interval never captures a stale ID
+  const refreshCurrentGenerator = useCallback(async () => {
+    const id = selectedGenIdRef.current;
+    if (id) {
+      const data = await fetchGenerator(id);
       if (data) {
         setCurrentGenerator(data);
         updateHistoricalData(data);
         checkForAlarms(data);
       }
     }
-  };
+  }, []); // stable — reads from ref, not state
 
   useEffect(() => {
     // Clear historical data when changing generators to avoid a "jump" in the chart
@@ -64,7 +74,7 @@ function App() {
     refreshCurrentGenerator();
     const interval = setInterval(refreshCurrentGenerator, 1000); // High refresh rate for selected gen
     return () => clearInterval(interval);
-  }, [selectedGenId]);
+  }, [selectedGenId, refreshCurrentGenerator]);
 
   // Fetch all load banks list
   useEffect(() => {
@@ -81,21 +91,33 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch specific load bank details
-  const refreshCurrentLoadbank = async () => {
-    if (selectedLbId) {
-      const data = await fetchLoadbank(selectedLbId);
+  // Fetch all switchgears list
+  useEffect(() => {
+    const loadSwgs = async () => {
+      const data = await fetchSwitchgears();
+      setAllSwitchgears(data);
+    };
+    loadSwgs();
+    const interval = setInterval(loadSwgs, 2000); // Refresh list every 2s
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch specific load bank details — use ref so the interval never captures a stale ID
+  const refreshCurrentLoadbank = useCallback(async () => {
+    const id = selectedLbIdRef.current;
+    if (id) {
+      const data = await fetchLoadbank(id);
       if (data) {
         setCurrentLoadbank(data);
       }
     }
-  };
+  }, []); // stable — reads from ref, not state
 
   useEffect(() => {
     refreshCurrentLoadbank();
     const interval = setInterval(refreshCurrentLoadbank, 1000); // High refresh rate for selected lb
     return () => clearInterval(interval);
-  }, [selectedLbId]);
+  }, [selectedLbId, refreshCurrentLoadbank]);
 
   const updateHistoricalData = (data: GeneratorStatus) => {
     const now = new Date();
@@ -144,7 +166,7 @@ function App() {
         newAlarms.push({
           id: `${data.id}-${f.key}-on-${Date.now()}`,
           type: 'warning',
-          message: `Fault Injected: ${f.name}`,
+          message: `[${data.id}] Fault Injected: ${f.name}`,
           timestamp: new Date(),
           acknowledged: false,
           generatorId: data.id
@@ -153,7 +175,7 @@ function App() {
         newAlarms.push({
           id: `${data.id}-${f.key}-off-${Date.now()}`,
           type: 'info',
-          message: `Fault Removed: ${f.name}`,
+          message: `[${data.id}] Fault Removed: ${f.name}`,
           timestamp: new Date(),
           acknowledged: false,
           generatorId: data.id
@@ -179,6 +201,16 @@ function App() {
     setAlarms([]);
   };
 
+  const handleEquipmentClick = (type: 'generator' | 'loadbank', id: string) => {
+    setTargetType(type);
+    if (type === 'generator') {
+      setSelectedGenId(id);
+    } else {
+      setSelectedLbId(id);
+    }
+    setActiveView('dashboard');
+  };
+
   return (
     <div className="min-h-screen bg-slate-950">
       <Header
@@ -187,18 +219,35 @@ function App() {
       />
 
       <div className="flex">
-        {/* sidebar overview */}
-        <aside className="w-64 bg-slate-900 p-6 flex flex-col gap-6 overflow-y-auto max-h-screen">
-          {allGenerators.length > 0 && (
-            <GeneratorsOverview generators={allGenerators} />
-          )}
-          {allLoadbanks.length > 0 && (
-            <LoadBanksOverview loadbanks={allLoadbanks} />
-          )}
-        </aside>
+        <main className="flex-1 p-6 overflow-y-auto max-h-[calc(100vh-64px)]">
+          {activeView === 'overview' ? (
+            <div className="space-y-8">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-6">
+                <div>
+                  <h2 className="text-3xl font-bold text-white tracking-tight">Plant Overview</h2>
+                  <p className="text-slate-400 mt-2 font-medium">Real-time status of all equipment</p>
+                </div>
+                <div className="flex gap-4">
+                   <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg">
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-1">Total Generation</div>
+                      <div className="text-xl font-bold text-emerald-400">
+                         {allGenerators.reduce((sum, g) => sum + g.activePower, 0).toFixed(0)} <span className="text-sm font-normal text-slate-500">kW</span>
+                      </div>
+                   </div>
+                   <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg">
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-1">Total Load</div>
+                      <div className="text-xl font-bold text-blue-400">
+                         {allLoadbanks.reduce((sum, lb) => sum + lb.activePower, 0).toFixed(0)} <span className="text-sm font-normal text-slate-500">kW</span>
+                      </div>
+                   </div>
+                </div>
+              </div>
 
-        <main className="flex-1 p-6">
-          {activeView === 'admin' ? (
+              <SwitchgearsOverview switchgears={allSwitchgears} />
+              <GeneratorsOverview generators={allGenerators} onEquipmentClick={(id) => handleEquipmentClick('generator', id)} />
+              <LoadBanksOverview loadbanks={allLoadbanks} onEquipmentClick={(id) => handleEquipmentClick('loadbank', id)} />
+            </div>
+          ) : activeView === 'admin' ? (
             <AdministrationPage />
           ) : (
             <>
@@ -249,7 +298,7 @@ function App() {
                           value={lb.id}
                           className="bg-slate-800 text-white"
                         >
-                          {lb.id} - {lb.load_applied} kW
+                          {lb.id} - {lb.load_applied.toFixed(1)} kW
                         </option>
                       ))}
                     </select>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { LoadBankStatus } from '../types/loadbank';
 import { selectLoadbankLoad, sendLoadbankCommand, setLoadbankModbusEnabled } from '../utils/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { WifiOff, Wifi } from 'lucide-react';
 
 interface LoadBankControlPanelProps {
   loadbank: LoadBankStatus;
@@ -32,8 +33,11 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
     onUpdate();
   };
 
+  // Toggle: if currently disabled → enable; if currently enabled → disable
   const handleModbusToggle = async () => {
-    await setLoadbankModbusEnabled(loadbank.id, !!loadbank.modbusDisabled);
+    // enabled=true means "bring the server back online"
+    const enable = loadbank.modbusDisabled;
+    await setLoadbankModbusEnabled(loadbank.id, enable);
     onUpdate();
   };
 
@@ -48,10 +52,13 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
             <span className={`px-2 py-1 text-xs rounded font-bold ${loadbank.control_on ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' : 'bg-slate-500/20 text-slate-400 border border-slate-500/50'}`}>
               MODBUS CONTROL: {loadbank.control_on ? 'ON' : 'OFF'}
             </span>
+            <span className={`px-2 py-1 text-xs rounded font-bold ${!loadbank.modbusDisabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' : 'bg-red-500/20 text-red-400 border border-red-500/50 animate-pulse'}`}>
+              {!loadbank.modbusDisabled ? 'ONLINE' : 'OFFLINE'}
+            </span>
           </div>
         </div>
       </CardHeader>
-      
+
       <CardContent className="pt-6 space-y-8">
         {/* Modbus Control Toggle */}
         <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
@@ -80,32 +87,45 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
               Disable Control
             </button>
           </div>
-          <div className="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between">
-            <span className="text-slate-300">Simulate Device Failure (TCP Server Online)</span>
-             <button
+
+          {/* Device Failure Simulation — label reflects current state */}
+          <div className={`mt-4 pt-4 border-t border-slate-700/50 p-3 rounded-lg ${loadbank.modbusDisabled ? 'bg-red-950/30 border border-red-600/40' : 'bg-slate-900/50 border border-slate-700/30'}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {loadbank.modbusDisabled
+                  ? <WifiOff className="w-4 h-4 text-red-400" />
+                  : <Wifi className="w-4 h-4 text-emerald-400" />}
+                <span className="text-slate-300 text-sm font-medium">
+                  {loadbank.modbusDisabled
+                    ? 'Device Failure Active — TCP Server Offline'
+                    : 'TCP Server Online'}
+                </span>
+              </div>
+              <button
                 onClick={handleModbusToggle}
-                className={`px-4 py-2 rounded text-sm font-medium ${
+                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
                   !loadbank.modbusDisabled
                     ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/50'
                     : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/50'
                 }`}
               >
-                {!loadbank.modbusDisabled ? 'Disable Server' : 'Enable Server'}
+                {!loadbank.modbusDisabled ? 'Simulate Failure' : 'Restore Device'}
               </button>
+            </div>
           </div>
         </div>
 
         {/* Load Selection & Action */}
         <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
           <h4 className="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">Load Management</h4>
-          
+
           <div className="grid grid-cols-3 gap-4 mb-6">
             <div>
               <label className="text-xs text-slate-400 block mb-1">Resistive (kW)</label>
-              <input 
-                type="number" 
-                value={resistiveKw} 
-                onChange={e => setResistiveKw(e.target.value)} 
+              <input
+                type="number"
+                value={resistiveKw}
+                onChange={e => setResistiveKw(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
                 min="0"
                 step="5"
@@ -113,10 +133,10 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
             </div>
             <div>
               <label className="text-xs text-slate-400 block mb-1">Inductive (kVArL)</label>
-              <input 
-                type="number" 
-                value={inductiveKvar} 
-                onChange={e => setInductiveKvar(e.target.value)} 
+              <input
+                type="number"
+                value={inductiveKvar}
+                onChange={e => setInductiveKvar(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
                 min="0"
                 step="5"
@@ -124,10 +144,10 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
             </div>
             <div>
               <label className="text-xs text-slate-400 block mb-1">Capacitive (kVArC)</label>
-              <input 
-                type="number" 
-                value={capacitiveKvar} 
-                onChange={e => setCapacitiveKvar(e.target.value)} 
+              <input
+                type="number"
+                value={capacitiveKvar}
+                onChange={e => setCapacitiveKvar(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-white"
                 min="0"
                 step="5"
@@ -158,9 +178,9 @@ export function LoadBankControlPanel({ loadbank, onUpdate }: LoadBankControlPane
             </button>
           </div>
         </div>
-        
+
         {/* Readings */}
-         <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+        <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
           <h4 className="text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">Current Readings</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
              <div className="bg-slate-900 p-3 rounded">

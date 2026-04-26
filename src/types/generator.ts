@@ -18,10 +18,15 @@ export interface GeneratorStatus {
   stopDelay?: number;
   // de-excitation state (SSL547)
   deexcited?: boolean;
+  // power reduction activated (SSL548)
+  powerReductionActivated?: boolean;
   // service switch mode: off/manual/auto (SSL425/426/427)
   serviceMode?: 'off' | 'manual' | 'auto';
   // modbus device failure simulation flag
   modbusDisabled?: boolean;
+  // FCB status
+  fcb1: boolean;
+  fcb2: boolean;
   // heartbeat supervision (R192 Bit 7)
   heartbeatFailed?: boolean;
   secondsSinceHeartbeat?: number;
